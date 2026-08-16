@@ -1,0 +1,9 @@
+# Конфиг oapi-codegen (см. D-02, уточнение от 2026-08-16 в 00-overview.md).
+# Модели + strict-server поверх stdlib net/http (ServeMux, Go 1.22+).
+package: genapi
+output: internal/controller/http/genapi/api.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+  embedded-spec: true

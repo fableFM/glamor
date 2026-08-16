@@ -1,0 +1,53 @@
+version: "2"
+
+run:
+  timeout: 10m
+  build-tags:
+    - e2e
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - depguard
+    - gocritic
+    - revive
+    - misspell
+    - unconvert
+    - unparam
+  settings:
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: "math/rand$"
+              desc: use math/rand/v2
+            - pkg: "github.com/sirupsen/logrus"
+              desc: not allowed. Use "log/slog"
+            - pkg: "github.com/pkg/errors"
+              desc: 'use stdlib errors + fmt.Errorf with %w'
+    gocritic:
+      disabled-checks: []
+    revive:
+      rules:
+        # DTO-гетерогенные пакеты (dtorep и др.) не обязываем документировать
+        # каждый экспортируемый тип — комментарии пишем там, где есть семантика.
+        - name: exported
+          disabled: true
+  exclusions:
+    generated: lax
+    rules:
+      # сгенерённый код не линтим строго
+      - path: \.gen\.go$
+        linters:
+          - gocritic
+          - revive
+
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true

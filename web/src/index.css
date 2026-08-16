@@ -1,0 +1,28 @@
+@import 'tailwindcss';
+
+/*
+  Тёмная тема по умолчанию (T-13). Светлая — позже, поэтому пока
+  просто фиксируем тёмную палитру на уровне body.
+*/
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-zinc-950);
+  color: var(--color-zinc-300);
+  font-family:
+    system-ui,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

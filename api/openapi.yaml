@@ -1,0 +1,954 @@
+openapi: 3.0.3
+info:
+  title: glamor daemon API
+  version: 0.1.0
+  description: |
+    HTTP API и WS-события демона glamord (D-02: спека — source of truth,
+    Go strict-server + модели через oapi-codegen, TS-типы через
+    openapi-typescript — см. уточнение D-02 от 2026-08-16).
+    Все мутации идемпотентны (D-12): header `Idempotency-Key`.
+    Auth: Bearer-токен (D-08) на всё, кроме /healthz; для /ws — query-параметр.
+servers:
+  - url: http://127.0.0.1:{port}
+    variables:
+      port:
+        default: "0"
+        description: динамический порт демона (D-08), см. ~/.glamor/daemon.json
+tags:
+  - name: system
+  - name: projects
+  - name: pipelines
+  - name: runs
+  - name: gates
+  - name: events
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      operationId: healthz
+      summary: Liveness probe демона (без auth)
+      responses:
+        "200":
+          description: демон жив
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+  /version:
+    get:
+      tags: [system]
+      operationId: version
+      summary: Версия демона
+      responses:
+        "200":
+          description: версия
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionInfo"
+  /projects:
+    get:
+      tags: [projects]
+      operationId: listProjects
+      summary: Список проектов
+      responses:
+        "200":
+          description: проекты
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Project"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [projects]
+      operationId: createProject
+      summary: Зарегистрировать проект
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateProjectRequest"
+      responses:
+        "201":
+          description: создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        "200":
+          description: проект с таким path уже существует (идемпотентность)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          $ref: "#/components/responses/Error"
+  /projects/{id}:
+    get:
+      tags: [projects]
+      operationId: getProject
+      summary: Проект с активными ранами и счётчиком открытых гейтов
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: проект
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDetail"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [projects]
+      operationId: patchProject
+      summary: Обновить ide_command / default_branch
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchProjectRequest"
+      responses:
+        "200":
+          description: обновлён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Project"
+        default:
+          $ref: "#/components/responses/Error"
+  /projects/{id}/pipelines:
+    get:
+      tags: [pipelines]
+      operationId: listProjectPipelines
+      summary: Пайплайны проекта (+ глобальные)
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: пайплайны
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Pipeline"
+        default:
+          $ref: "#/components/responses/Error"
+  /pipelines/{id}:
+    get:
+      tags: [pipelines]
+      operationId: getPipeline
+      summary: Версия пайплайна со списком всех версий
+      parameters:
+        - $ref: "#/components/parameters/PipelineId"
+      responses:
+        "200":
+          description: пайплайн
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineDetail"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs:
+    post:
+      tags: [runs]
+      operationId: createRun
+      summary: Создать ран (идемпотентно, D-12)
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRunRequest"
+      responses:
+        "201":
+          description: создан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "200":
+          description: повтор Idempotency-Key — возвращён первый ран
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        default:
+          $ref: "#/components/responses/Error"
+    get:
+      tags: [runs]
+      operationId: listRuns
+      summary: Список ранов с фильтрами
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: pipeline_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+        - name: state
+          in: query
+          schema:
+            $ref: "#/components/schemas/RunState"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        "200":
+          description: раны
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Run"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs/{id}:
+    get:
+      tags: [runs]
+      operationId: getRun
+      summary: Полный срез рана (стадии, гейты, артефакты)
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: ран
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunDetail"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs/{id}/stop:
+    post:
+      tags: [runs]
+      operationId: stopRun
+      summary: Остановить ран (идемпотентно, D-14)
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: остановлен (или уже остановлен)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs/{id}/resume:
+    post:
+      tags: [runs]
+      operationId: resumeRun
+      summary: Ручной рестарт failed/interrupted рана
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: ран возобновлён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs/{id}/notes:
+    post:
+      tags: [runs]
+      operationId: createNote
+      summary: Queue note к ближайшему событию рана (D-22)
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNoteRequest"
+      responses:
+        "201":
+          description: заметка поставлена в очередь
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs/{id}/events:
+    get:
+      tags: [events]
+      operationId: listRunEvents
+      summary: REST-доступ к журналу событий рана
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: after_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+            default: 0
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 500
+      responses:
+        "200":
+          description: страница событий
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+        default:
+          $ref: "#/components/responses/Error"
+  /gates/{id}/resolve:
+    post:
+      tags: [gates]
+      operationId: resolveGate
+      summary: Резолв гейта (идемпотентно; повтор → 200 + already_resolved)
+      parameters:
+        - $ref: "#/components/parameters/GateId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveGateRequest"
+      responses:
+        "200":
+          description: гейт резолвнут
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveGateResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /stages/{id}/interrupt:
+    post:
+      tags: [runs]
+      operationId: interruptStage
+      summary: Interrupt & Steer (D-22) — прервать этап и резюмить с сообщением
+      parameters:
+        - $ref: "#/components/parameters/StageId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InterruptStageRequest"
+      responses:
+        "200":
+          description: этап прерван, steer-заметка поставлена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stage"
+        default:
+          $ref: "#/components/responses/Error"
+  /ws:
+    get:
+      tags: [events]
+      operationId: eventsWs
+      summary: WebSocket-поток событий журнала (D-04)
+      description: |
+        Upgrade в WebSocket. Протокол: догон событиями с id > last_event_id,
+        сообщение `synced` (граница replay/live), затем live-поток Event'ов.
+        Медленный клиент отключается (close 1001, "resync required") и
+        переподключается с последним полученным last_event_id.
+      parameters:
+        - name: run_id
+          in: query
+          schema:
+            type: string
+            default: "*"
+          description: ран для подписки; "*" — все раны (инбокс гейтов)
+        - name: last_event_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+            default: 0
+        - name: token
+          in: query
+          schema:
+            type: string
+          description: токен localhost-API (D-08), если настроен
+      responses:
+        "101":
+          description: WebSocket upgrade; далее Event | SyncedMessage
+        "401":
+          description: неверный/отсутствующий token
+components:
+  parameters:
+    ProjectId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    PipelineId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    RunId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    GateId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    StageId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+      description: ключ идемпотентности (D-12); не передан — сервер сгенерирует
+  responses:
+    Error:
+      description: ошибка в едином формате
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            доменный код: not_found, invalid_transition, run_locked,
+            gate_already_resolved, duplicate, draining, validation, internal
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    VersionInfo:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: string
+        harnesses:
+          type: array
+          items:
+            type: string
+          description: доступные harness-адаптеры (exec.LookPath при старте, T-06)
+    Project:
+      type: object
+      required: [id, path, name, default_branch, ide_command, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        path:
+          type: string
+        name:
+          type: string
+        default_branch:
+          type: string
+        ide_command:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    CreateProjectRequest:
+      type: object
+      required: [path, name]
+      properties:
+        path:
+          type: string
+        name:
+          type: string
+        default_branch:
+          type: string
+        ide_command:
+          type: string
+    PatchProjectRequest:
+      type: object
+      properties:
+        default_branch:
+          type: string
+        ide_command:
+          type: string
+    ProjectDetail:
+      allOf:
+        - $ref: "#/components/schemas/Project"
+        - type: object
+          required: [active_runs, open_gates]
+          properties:
+            active_runs:
+              type: array
+              items:
+                $ref: "#/components/schemas/Run"
+            open_gates:
+              type: integer
+              description: открытые гейты по всем активным ранам проекта
+    Pipeline:
+      type: object
+      required: [id, project_id, name, version, spec_json, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: NULL = глобальный пайплайн
+        name:
+          type: string
+        version:
+          type: integer
+          format: int64
+        parent_version_id:
+          type: integer
+          format: int64
+          nullable: true
+        spec_json:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    PipelineDetail:
+      allOf:
+        - $ref: "#/components/schemas/Pipeline"
+        - type: object
+          required: [versions]
+          properties:
+            versions:
+              type: array
+              items:
+                $ref: "#/components/schemas/Pipeline"
+    RunState:
+      type: string
+      enum: [draft, running, waiting_gate, succeeded, failed, stopped]
+    StageState:
+      type: string
+      enum: [pending, running, succeeded, failed, interrupted, skipped]
+    GateKind:
+      type: string
+      enum: [plan_approval, question, escalation, final_review]
+    GateState:
+      type: string
+      enum: [open, answered, approved, rejected, expired]
+    Run:
+      type: object
+      required: [id, project_id, pipeline_version_id, task_text, base_branch,
+                 branch, state, depth, notify_tg, created_at]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: integer
+          format: int64
+        pipeline_version_id:
+          type: integer
+          format: int64
+        task_text:
+          type: string
+        base_branch:
+          type: string
+        branch:
+          type: string
+        state:
+          $ref: "#/components/schemas/RunState"
+        depth:
+          type: integer
+          format: int64
+        notify_tg:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+    CreateRunRequest:
+      type: object
+      required: [project_id, pipeline_version_id, task_text]
+      properties:
+        project_id:
+          type: integer
+          format: int64
+        pipeline_version_id:
+          type: integer
+          format: int64
+        task_text:
+          type: string
+        base_branch:
+          type: string
+          description: не указана — default_branch проекта
+        branch:
+          type: string
+          description: не указана — glamor/<slug> от base (D-31)
+        depth:
+          type: integer
+          format: int64
+          default: 0
+        notify_tg:
+          type: boolean
+          default: true
+        force:
+          type: boolean
+          default: false
+          description: override грязного чекаuta в preflight (D-34, T-10)
+    Stage:
+      type: object
+      required: [id, run_id, stage_key, iteration, state, harness,
+                 resume_count, tokens_in, tokens_out]
+      properties:
+        id:
+          type: integer
+          format: int64
+        run_id:
+          type: string
+        stage_key:
+          type: string
+        iteration:
+          type: integer
+          format: int64
+        state:
+          $ref: "#/components/schemas/StageState"
+        harness:
+          type: string
+        session_id:
+          type: string
+          nullable: true
+        pid:
+          type: integer
+          format: int64
+          nullable: true
+        exit_code:
+          type: integer
+          format: int64
+          nullable: true
+        stop_requested_by:
+          type: string
+          nullable: true
+        resume_count:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        tokens_in:
+          type: integer
+          format: int64
+        tokens_out:
+          type: integer
+          format: int64
+        error:
+          type: string
+          nullable: true
+    Gate:
+      type: object
+      required: [id, run_id, kind, question, state, created_at]
+      properties:
+        id:
+          type: string
+        run_id:
+          type: string
+        stage_id:
+          type: integer
+          format: int64
+          nullable: true
+        kind:
+          $ref: "#/components/schemas/GateKind"
+        question:
+          type: string
+        context_json:
+          type: string
+        state:
+          $ref: "#/components/schemas/GateState"
+        answer:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+    ResolveGateRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [approve, reject, answer, comment]
+        text:
+          type: string
+    ResolveGateResponse:
+      type: object
+      required: [gate, already_resolved]
+      properties:
+        gate:
+          $ref: "#/components/schemas/Gate"
+        already_resolved:
+          type: boolean
+    Artifact:
+      type: object
+      required: [id, run_id, path, kind, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        run_id:
+          type: string
+        stage_id:
+          type: integer
+          format: int64
+          nullable: true
+        path:
+          type: string
+        kind:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Note:
+      type: object
+      required: [id, run_id, text, consumed, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        run_id:
+          type: string
+        stage_id:
+          type: integer
+          format: int64
+          nullable: true
+        text:
+          type: string
+        kind:
+          type: string
+          enum: [note, steer]
+        consumed:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    CreateNoteRequest:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+    InterruptStageRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: steer-сообщение — сессия резюмится с ним (D-22)
+    RunDetail:
+      allOf:
+        - $ref: "#/components/schemas/Run"
+        - type: object
+          required: [stages, gates, artifacts, notes]
+          properties:
+            stages:
+              type: array
+              items:
+                $ref: "#/components/schemas/Stage"
+            gates:
+              type: array
+              items:
+                $ref: "#/components/schemas/Gate"
+            artifacts:
+              type: array
+              items:
+                $ref: "#/components/schemas/Artifact"
+            notes:
+              type: array
+              items:
+                $ref: "#/components/schemas/Note"
+    Event:
+      type: object
+      description: |
+        Событие журнала (D-11). Приходит по WS (/ws) и возвращается Replay-API.
+        kind-пространства: run.*, stage.*, gate.*, stream.*, notify.*.
+      required: [id, run_id, ts, kind, payload]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: монотонный id журнала (AUTOINCREMENT)
+        run_id:
+          type: string
+          description: uuid рана; "*" зарезервировано для подписки «все раны»
+        stage_id:
+          type: integer
+          format: int64
+          nullable: true
+        ts:
+          type: string
+          format: date-time
+        kind:
+          $ref: "#/components/schemas/EventKind"
+        payload:
+          $ref: "#/components/schemas/EventPayload"
+    EventKind:
+      type: string
+      enum:
+        - run.state_changed
+        - run.branch_mismatch
+        - stage.state_changed
+        - stage.queued
+        - stage.interrupted
+        - stage.resumed
+        - gate.opened
+        - gate.resolved
+        - stream.thinking
+        - stream.text
+        - stream.tool_call
+        - stream.tool_result
+        - stream.usage
+        - stream.error
+        - stream.raw
+        - system
+    EventPayload:
+      type: object
+      description: |
+        Полиморфный payload события (детерминирован kind'ом события):
+        - run.state_changed / stage.state_changed → StateChangedPayload
+        - gate.opened / gate.resolved → GatePayload
+        - stream.thinking / stream.text / stream.raw → StreamTextPayload
+        - stream.tool_call / stream.tool_result → StreamToolPayload
+        - stream.usage → StreamUsagePayload
+        - stream.error → StreamErrorPayload
+      additionalProperties: true
+    StateChangedPayload:
+      type: object
+      required: [to]
+      properties:
+        from:
+          type: string
+          description: пусто при создании сущности
+        to:
+          type: string
+    GatePayload:
+      type: object
+      description: |
+        gate.opened — сериализованный объект гейта; gate.resolved —
+        gate_id + resolution + answer.
+      properties:
+        gate_id:
+          type: string
+        kind:
+          $ref: "#/components/schemas/GateKind"
+        question:
+          type: string
+        resolution:
+          type: string
+          enum: [answered, approved, rejected, expired]
+        answer:
+          type: string
+          nullable: true
+    StreamTextPayload:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+    StreamToolPayload:
+      type: object
+      properties:
+        tool:
+          type: string
+        call_id:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: string
+        is_error:
+          type: boolean
+    StreamUsagePayload:
+      type: object
+      properties:
+        tokens_in:
+          type: integer
+          format: int64
+        tokens_out:
+          type: integer
+          format: int64
+        cost_usd:
+          type: number
+          nullable: true
+        model:
+          type: string
+    StreamErrorPayload:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        retriable:
+          type: boolean
+    SyncedMessage:
+      type: object
+      description: |
+        Стартовое WS-сообщение — граница replay/live (T-04): всё до last_event_id
+        уже отправлено догоном, дальше идёт live-поток.
+      required: [type, last_event_id]
+      properties:
+        type:
+          type: string
+          enum: [synced]
+        last_event_id:
+          type: integer
+          format: int64

@@ -1,0 +1,3 @@
+{"type":"system","subtype":"session_start","session_id":"sess-err-1","model":"qwen3-coder-plus","cwd":"/tmp/proj"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Начинаю работу..."}]},"parent_tool_use_id":null}
+{"type":"result","subtype":"error","is_error":true,"session_id":"sess-err-1","result":"","error":{"message":"429 Too Many Requests: rate limit exceeded"},"duration_ms":800}
