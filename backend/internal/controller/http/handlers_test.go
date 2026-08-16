@@ -19,13 +19,16 @@ import (
 	"github.com/fableFM/glamor/internal/events"
 	"github.com/fableFM/glamor/internal/repository"
 	artifactsrep "github.com/fableFM/glamor/internal/repository/artifacts"
+	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
 	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
 	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
+	"github.com/fableFM/glamor/internal/service/catalog"
+	"github.com/fableFM/glamor/internal/service/runsapi"
+	"github.com/fableFM/glamor/internal/service/runsmachine"
 	_ "github.com/fableFM/glamor/migrations"
 	"github.com/fableFM/glamor/pkg/uuid"
 )
@@ -34,7 +37,7 @@ const testToken = "test-token"
 
 type fixture struct {
 	server    *httptest.Server
-	machine   *usecase.Machine
+	machine   *runsmachine.Machine
 	client    *http.Client
 	pipelines pipelinesrep.RepositoryWithTX
 	db        *sql.DB
@@ -51,22 +54,26 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(func() { _ = db.Close() })
 
 	hub := events.NewHub()
-	journal := events.NewJournal(db, hub)
-	machine := usecase.NewMachine(db, journal)
-	machine.SetTxExecutor(journal)
+	journal := events.NewJournal(eventsrep.NewRepository(db), repository.NewTxManager(db), hub)
+	machine := runsmachine.NewMachine(
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		gatesrep.NewRepository(db), pipelinesrep.NewRepository(db),
+		projectsrep.NewRepository(db), notesrep.NewRepository(db),
+		journal, journal)
+	runsSvc := runsapi.New(machine, journal, journal,
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		notesrep.NewRepository(db), projectsrep.NewRepository(db),
+		pipelinesrep.NewRepository(db), gatesrep.NewRepository(db))
 
 	rest := httpctrl.NewHandler(httpctrl.Deps{
-		Machine:   machine,
-		Journal:   journal,
-		Projects:  projectsrep.NewRepository(db),
-		Pipelines: pipelinesrep.NewRepository(db),
-		Runs:      runsrep.NewRepository(db),
-		Stages:    stagesrep.NewRepository(db),
-		Gates:     gatesrep.NewRepository(db),
-		Artifacts: artifactsrep.NewRepository(db),
-		Notes:     notesrep.NewRepository(db),
-		Token:     testToken,
-		Version:   "test",
+		Machine: runsSvc,
+		API: catalog.New(
+			projectsrep.NewRepository(db), pipelinesrep.NewRepository(db),
+			runsrep.NewRepository(db), stagesrep.NewRepository(db),
+			gatesrep.NewRepository(db), artifactsrep.NewRepository(db),
+			notesrep.NewRepository(db), journal),
+		Token:   testToken,
+		Version: "test",
 	})
 
 	server := httptest.NewServer(rest)
@@ -285,7 +292,7 @@ func TestResolveGate_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, m.TransitionRun(ctx, runID, dtorep.RunStateRunning))
 
-	gate, err := m.OpenGate(ctx, usecase.OpenGateRequest{
+	gate, err := m.OpenGate(ctx, runsmachine.OpenGateRequest{
 		RunID: runID, Kind: dtorep.GateKindPlanApproval, Question: "ok?",
 	})
 	require.NoError(t, err)

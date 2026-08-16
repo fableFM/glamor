@@ -32,7 +32,7 @@ vendor-память, гейты) — переносим идеи и промпт
   команд, что и UI. Никаких приватных лазеек.
 - Монорепо: `api/` (openapi.yaml — общий контракт фронта и бека),
   `backend/` (весь Go-код: `cmd/glamord`, `cmd/glamor` (CLI), `internal/
-  {controller,usecase,service,repository,events,harness,gitx,notify,dto,
+  {controller,service,repository,events,harness,gitx,notify,dto,
   cstmerrors}`, `migrations/`, `pkg/`, go.mod + vendor), `web/`, `src-tauri/`.
   *(уточнено 2026-08-16: изначально Go-код лежал в корне — вынесен в
   `backend/`, чтобы не смешиваться с web/ и src-tauri/.)*
@@ -174,15 +174,29 @@ invariants/forbidden_patterns с привязкой к источнику, edge-
 - **D-80** Код пишем в стиле SALT-сервисов пользователя (референсы:
   `~/go/salt/dashboard-manager`, security-gate). Конкретика:
   - **Layout**: `backend/cmd/glamord` (main + config.go), слои —
-    `backend/internal/controller/{http,ws}` (транспорт) → `internal/usecase`
-    (оркестрация сценариев) → `internal/service/<domain>` (бизнес-логика)
-    → `internal/repository/<domain>` (хранение). Плюс наши домены:
-    `internal/harness/<name>`, `internal/events`, `internal/gitx`,
+    `backend/internal/controller/{http,ws}` (транспорт) →
+    `internal/service/<domain>` (бизнес-логика, оркестрация, владение
+    транзакциями) → `internal/repository/<domain>` (хранение). Плюс наши
+    домены: `internal/harness/<name>`, `internal/events`, `internal/gitx`,
     `internal/notify/telegram`. Общие хелперы — `backend/pkg/`.
     *(уточнено 2026-08-16: Go-корень — `backend/`.)*
-  - **DTO между слоями**: `internal/dto/{dtoctrl,dtosvc,dtousecase,dtorep}` —
+    *(уточнено 2026-08-16: **слой `internal/usecase` УПРАЗДНЁН** — решение
+    пользователя после ревью T-01..T-13. Оркестрация сценариев и
+    cross-repository координация — роль service (канон SALT: repository
+    координирует service, отдельный usecase-слой для локального демона —
+    избыточная церемония). Операционная форма правил и запретов —
+    project-скилл `.agents/skills/glamor-architecture`.)*
+  - **DTO между слоями**: `internal/dto/{dtoctrl,dtosvc,dtorep}` —
     данные, пересекающие границы слоёв, не утекают чужими типами; модели
     репозитория неэкспортируемы, маппинг — `mappers.go` в каждом слое.
+    *(уточнено 2026-08-16: `dtousecase` упразднён вместе со слоем usecase;
+    `dtoctrl`/`dtosvc` вводить только при реальном расхождении формы
+    границ, не «на будущее».)*
+    *(уточнено 2026-08-16, fix-task-0 F-04, вариант A):* `dtorep` — единый
+    доменный DTO-язык демона на всех границах внутри backend (локальный
+    демон, один модуль — слоёвые DTO избыточны); `genapi` остаётся
+    транспортной границей. Пустые `dtoctrl`/`dtosvc`/`dtousecase` удалены;
+    разделение отложено до появления второго потребителя (TG-адаптер, M2).
   - **Repository-паттерн как в dashboard-manager**: `interfaces.go`
     (интерфейс, в т.ч. `RepositoryWithTX`), общий `query`-struct, работающий
     и на пуле, и на транзакции; `OpenTx(ctx) (Tx, error)` с
@@ -202,6 +216,16 @@ invariants/forbidden_patterns с привязкой к источнику, edge-
     путь пакета). В локальном демоне упрощаем до `log/slog` с полем
     `component=<package>`; если захочется otel — добавим отдельно.
   - gofumpt-форматирование, импорты группами: stdlib / внешние / свои.
+  - *(уточнено 2026-08-16, fix-task-0 F-02):* `TxExecutor`/`EventAppender`
+    оперируют `*sql.Tx` — осознанное отклонение: единственный писатель
+    SQLite, `pkg/commontx` — аналог dashboard-manager; service не исполняет
+    SQL, а только собирает tx-обёртки репозиториев через `NewTx(tx)`.
+  - *(уточнено 2026-08-16, fix-task-0 F-03):* supervisor — оркестратор
+    тика (`internal/service/supervisor`), читает репозитории напрямую
+    (event-driven tick, ADR-001); стейт-машина — `internal/service/runsmachine`;
+    `internal/service/runsapi` — API-сценарии (идемпотентность D-12,
+    git-preflight T-10); `internal/service/catalog` — read-фасад/CRUD
+    для контроллера. Слой usecase упразднён (см. выше).
 
 ### UX
 

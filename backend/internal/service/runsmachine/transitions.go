@@ -1,8 +1,8 @@
-// Package runs — доменная стейт-машина ранов/стадий/гейтов (ADR-001, D-10/11/14/16).
+// Package runsmachine — доменная стейт-машина ранов/стадий/гейтов (ADR-001, D-10/11/14/16).
 // Движок не хранит состояние в памяти: каждое решение принимается чтением
 // runs/run_stages/gates из SQLite, переходы — только CAS + событие журнала
 // в одной транзакции.
-package runs
+package runsmachine
 
 import (
 	"github.com/fableFM/glamor/internal/cstmerrors"

@@ -13,7 +13,11 @@
 
 ## Правила реализации
 
-- Кодстайл — D-80 (SALT): слои controller/usecase/service/repository,
+- **Архитектура слоёв и запреты** — project-скилл
+  `.agents/skills/glamor-architecture` (обязателен при любой работе с
+  `backend/`): слои controller → service → repository, слой usecase
+  ЗАПРЕЩЁН, controller не импортирует repository, self-DI запрещён.
+- Кодстайл — D-80 (SALT): слои controller/service/repository,
   dto-пакеты, cstmerrors, ручной DI, gofumpt. Референс:
   `~/go/salt/dashboard-manager`.
 - Миграции — D-05: goose v3 Go-файлами, `AddMigrationContext`, запуск

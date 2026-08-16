@@ -1,4 +1,4 @@
-package runs
+package runsmachine
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 
 	"github.com/fableFM/glamor/internal/cstmerrors"
 	"github.com/fableFM/glamor/internal/dto/dtorep"
-	"github.com/fableFM/glamor/internal/repository"
 	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
@@ -43,40 +42,43 @@ type EventAppender interface {
 // Machine — стейт-машина ранов/стадий/гейтов. Состояния в памяти нет:
 // все решения принимаются чтением БД (event-driven tick, ADR-001).
 type Machine struct {
-	db          *sql.DB
-	txm         TxExecutor
-	runs        runsrep.RepositoryWithTX
-	stages      stagesrep.RepositoryWithTX
-	gates       gatesrep.RepositoryWithTX
-	pipelines   pipelinesrep.RepositoryWithTX
-	projects    projectsrep.RepositoryWithTX
-	notes       notesrep.RepositoryWithTX
-	appender    EventAppender
-	preflight   PreflightFunc
-	branchNamer BranchNamerFunc
+	txm       TxExecutor
+	runs      runsrep.RepositoryWithTX
+	stages    stagesrep.RepositoryWithTX
+	gates     gatesrep.RepositoryWithTX
+	pipelines pipelinesrep.RepositoryWithTX
+	projects  projectsrep.RepositoryWithTX
+	notes     notesrep.RepositoryWithTX
+	appender  EventAppender
 }
 
-func NewMachine(db *sql.DB, appender EventAppender) *Machine {
+// NewMachine собирает стейт-машину из готовых зависимостей (ручной DI в
+// main, D-80). txm — исполнитель транзакций: repository.TxManager (без
+// рассылки) или events.Journal (T-04 — публикация событий в Hub после
+// коммита). appender == nil → события пишутся напрямую в репозиторий.
+func NewMachine(
+	runs runsrep.RepositoryWithTX,
+	stages stagesrep.RepositoryWithTX,
+	gates gatesrep.RepositoryWithTX,
+	pipelines pipelinesrep.RepositoryWithTX,
+	projects projectsrep.RepositoryWithTX,
+	notes notesrep.RepositoryWithTX,
+	txm TxExecutor,
+	appender EventAppender,
+) *Machine {
 	if appender == nil {
 		appender = repoAppender{}
 	}
 	return &Machine{
-		db:        db,
-		txm:       repository.NewTxManager(db),
-		runs:      runsrep.NewRepository(db),
-		stages:    stagesrep.NewRepository(db),
-		gates:     gatesrep.NewRepository(db),
-		pipelines: pipelinesrep.NewRepository(db),
-		projects:  projectsrep.NewRepository(db),
-		notes:     notesrep.NewRepository(db),
+		txm:       txm,
+		runs:      runs,
+		stages:    stages,
+		gates:     gates,
+		pipelines: pipelines,
+		projects:  projects,
+		notes:     notes,
 		appender:  appender,
 	}
-}
-
-// SetTxExecutor подменяет исполнитель транзакций (T-04: events.Journal —
-// транзакции машины публикуют события в Hub после коммита).
-func (m *Machine) SetTxExecutor(executor TxExecutor) {
-	m.txm = executor
 }
 
 // repoAppender — EventAppender поверх репозитория events (без рассылки).
@@ -101,7 +103,10 @@ type stateChangedPayload struct {
 	To   string `json:"to"`
 }
 
-func appendStateEvent(ctx context.Context, tx *sql.Tx, a EventAppender, runID string, stageID *int64, kind, from, to string) error {
+// AppendStateEvent пишет событие смены состояния (payload {from,to}) в
+// журнал внутри транзакции перехода (D-11). Экспортировано для
+// API-сценариев service/runsapi, собирающих свои tx (StopRun и т.п.).
+func AppendStateEvent(ctx context.Context, tx *sql.Tx, a EventAppender, runID string, stageID *int64, kind, from, to string) error {
 	payload, err := json.Marshal(stateChangedPayload{From: from, To: to})
 	if err != nil {
 		return fmt.Errorf("failed to marshal event payload: %w", err)
@@ -120,11 +125,14 @@ func appendStateEvent(ctx context.Context, tx *sql.Tx, a EventAppender, runID st
 // ADR-001). Терминальным переходам выставляется finished_at.
 func (m *Machine) TransitionRun(ctx context.Context, runID string, to dtorep.RunState) error {
 	return m.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		return m.transitionRunInTx(ctx, tx, runID, to)
+		return m.TransitionRunInTx(ctx, tx, runID, to)
 	})
 }
 
-func (m *Machine) transitionRunInTx(ctx context.Context, tx *sql.Tx, runID string, to dtorep.RunState) error {
+// TransitionRunInTx — переход рана внутри уже открытой транзакции
+// (CAS + событие журнала, D-10/11). Экспортировано для API-сценариев
+// service/runsapi, которым переход нужен в составе большей транзакции.
+func (m *Machine) TransitionRunInTx(ctx context.Context, tx *sql.Tx, runID string, to dtorep.RunState) error {
 	runsTx := runsrep.NewTx(tx)
 
 	run, err := runsTx.GetRunByID(ctx, runID)
@@ -152,7 +160,7 @@ func (m *Machine) transitionRunInTx(ctx context.Context, tx *sql.Tx, runID strin
 		return fmt.Errorf("run %s: %w", runID, cstmerrors.ErrConcurrentModification)
 	}
 
-	return appendStateEvent(ctx, tx, m.appender, runID, nil,
+	return AppendStateEvent(ctx, tx, m.appender, runID, nil,
 		EventKindRunStateChanged, string(run.State), string(to))
 }
 
@@ -192,7 +200,7 @@ func (m *Machine) TransitionStage(ctx context.Context, stageID int64, to dtorep.
 			return fmt.Errorf("stage %d: %w", stageID, cstmerrors.ErrConcurrentModification)
 		}
 
-		return appendStateEvent(ctx, tx, m.appender, stage.RunID, &stageID,
+		return AppendStateEvent(ctx, tx, m.appender, stage.RunID, &stageID,
 			EventKindStageStateChanged, string(stage.State), string(to))
 	})
 }
@@ -229,7 +237,7 @@ func (m *Machine) StartStage(ctx context.Context, runID, stageKey, harness strin
 			return fmt.Errorf("failed to load created stage: %w", err)
 		}
 
-		return appendStateEvent(ctx, tx, m.appender, runID, &id,
+		return AppendStateEvent(ctx, tx, m.appender, runID, &id,
 			EventKindStageStateChanged, "", string(dtorep.StageStatePending))
 	})
 	if err != nil {
@@ -284,7 +292,7 @@ func (m *Machine) ResumeStage(ctx context.Context, stageID int64) (*dtorep.Stage
 			return fmt.Errorf("failed to load created stage: %w", err)
 		}
 
-		return appendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
+		return AppendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
 			EventKindStageStateChanged, string(dtorep.StageStateInterrupted),
 			string(dtorep.StageStatePending))
 	})
@@ -410,7 +418,7 @@ func (m *Machine) OpenGate(ctx context.Context, req OpenGateRequest) (*dtorep.Ga
 			if !ok {
 				return fmt.Errorf("run %s: %w", req.RunID, cstmerrors.ErrConcurrentModification)
 			}
-			if err := appendStateEvent(ctx, tx, m.appender, req.RunID, nil,
+			if err := AppendStateEvent(ctx, tx, m.appender, req.RunID, nil,
 				EventKindRunStateChanged, string(dtorep.RunStateRunning), string(dtorep.RunStateWaitingGate)); err != nil {
 				return err
 			}
@@ -518,12 +526,12 @@ func (m *Machine) ResolveGate(ctx context.Context, gateID string, resolution dto
 			return nil // ран уже двигается (например stopped пользователем)
 		}
 
-		if err := m.transitionRunInTx(ctx, tx, gate.RunID, dtorep.RunStateRunning); err != nil {
+		if err := m.TransitionRunInTx(ctx, tx, gate.RunID, dtorep.RunStateRunning); err != nil {
 			return err
 		}
 		if resolution == dtorep.GateStateRejected {
 			// reject гейта проваливает ран (ADR-001)
-			return m.transitionRunInTx(ctx, tx, gate.RunID, dtorep.RunStateFailed)
+			return m.TransitionRunInTx(ctx, tx, gate.RunID, dtorep.RunStateFailed)
 		}
 		return nil
 	})
@@ -564,4 +572,77 @@ func (m *Machine) UpdateRunningStage(ctx context.Context, stageID int64, fields 
 		}
 		return nil
 	})
+}
+
+// ReenterStage — диалоговый ре-вход этапа (D-20/22/23): новая попытка
+// (iteration+1) БЕЗ увеличения resume_count — это не auto-resume, а
+// продолжение диалога (ответ на вопрос, комментарий, steer). Допустимые
+// исходные состояния: succeeded (вопросы-ответы), interrupted (steer),
+// failed (ручной ре-вход). message != "" → steer-заметка (уйдёт в промпт
+// новой попытки через consumption в supervisor).
+func (m *Machine) ReenterStage(ctx context.Context, stageID int64, message string) (*dtorep.Stage, error) {
+	var created *dtorep.Stage
+	err := m.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		stagesTx := stagesrep.NewTx(tx)
+
+		prev, err := stagesTx.GetStageByID(ctx, stageID)
+		if err != nil {
+			return fmt.Errorf("failed to load stage: %w", err)
+		}
+		switch prev.State {
+		case dtorep.StageStateSucceeded, dtorep.StageStateInterrupted, dtorep.StageStateFailed:
+		default:
+			return fmt.Errorf("stage %d in state %s: %w",
+				stageID, prev.State, cstmerrors.ErrInvalidTransition)
+		}
+		// ре-вход только от последней попытки цепочки
+		latest, err := stagesTx.GetLatestStage(ctx, prev.RunID, prev.StageKey)
+		if err != nil {
+			return fmt.Errorf("failed to load latest stage: %w", err)
+		}
+		if latest.ID != prev.ID {
+			return fmt.Errorf("stage %d: %w (re-enter of non-latest attempt, latest is %d)",
+				stageID, cstmerrors.ErrInvalidTransition, latest.ID)
+		}
+
+		id, err := stagesTx.CreateStage(ctx, dtorep.CreateStageRequest{
+			RunID:       prev.RunID,
+			StageKey:    prev.StageKey,
+			Iteration:   prev.Iteration + 1,
+			Harness:     prev.Harness,
+			ResumeCount: prev.ResumeCount, // НЕ инкрементируем: это диалог
+		})
+		if err != nil {
+			return err
+		}
+
+		if message != "" {
+			notesTx := notesrep.NewTx(tx)
+			if _, err := notesTx.CreateNote(ctx, dtorep.CreateNoteRequest{
+				RunID:          prev.RunID,
+				StageID:        &id,
+				Kind:           dtorep.NoteKindSteer,
+				Text:           message,
+				IdempotencyKey: uuid.New(),
+			}); err != nil {
+				return err
+			}
+		}
+
+		created, err = stagesTx.GetStageByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("failed to load created stage: %w", err)
+		}
+
+		if err := AppendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
+			EventKindStageStateChanged, string(prev.State), string(dtorep.StageStatePending)); err != nil {
+			return err
+		}
+		return AppendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
+			"stage.resumed", string(prev.State), string(dtorep.StageStatePending))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/events"
+	"github.com/fableFM/glamor/internal/repository"
 	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	"github.com/fableFM/glamor/internal/repository/testdb"
 )
@@ -21,7 +22,8 @@ func newJournal(t *testing.T) (*events.Journal, *events.Hub, string) {
 	db := testdb.New(t)
 	runID := testdb.SeedRun(t, db)
 	hub := events.NewHub()
-	return events.NewJournal(db, hub), hub, runID
+	journal := events.NewJournal(eventsrep.NewRepository(db), repository.NewTxManager(db), hub)
+	return journal, hub, runID
 }
 
 // Публикация — ПОСЛЕ коммита, не до; откат → события не рассылаются (D-11).
@@ -175,7 +177,7 @@ func TestHub_RunFilter(t *testing.T) {
 
 	subA, unsubA := hub.Subscribe("run-a")
 	defer unsubA()
-	subAll, unsubAll := hub.Subscribe(eventsrep.RunIDAll)
+	subAll, unsubAll := hub.Subscribe(dtorep.RunIDAll)
 	defer unsubAll()
 
 	hub.Publish(dtorep.Event{ID: 1, RunID: "run-b", Kind: "stream.text", PayloadJSON: `{}`})

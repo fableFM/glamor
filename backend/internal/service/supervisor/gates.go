@@ -2,12 +2,11 @@ package supervisor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
+	runsmachine "github.com/fableFM/glamor/internal/service/runsmachine"
 )
 
 // handlePostStageGates — диалоговый протокол после успешного этапа
@@ -32,7 +31,7 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 				"stage_key":      stage.StageKey,
 				"iteration":      stage.Iteration,
 			})
-			_, err := s.machine.OpenGate(ctx, usecase.OpenGateRequest{
+			_, err := s.machine.OpenGate(ctx, runsmachine.OpenGateRequest{
 				RunID:       run.ID,
 				StageID:     &stage.ID,
 				Kind:        dtorep.GateKindQuestion,
@@ -56,7 +55,7 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 				"artifact_paths": []string{spec.Artifact.Path},
 			})
 		}
-		_, err := s.machine.OpenGate(ctx, usecase.OpenGateRequest{
+		_, err := s.machine.OpenGate(ctx, runsmachine.OpenGateRequest{
 			RunID:       run.ID,
 			StageID:     &stage.ID,
 			Kind:        dtorep.GateKind(spec.GateAfter),
@@ -167,5 +166,3 @@ func (s *Supervisor) consumeNotes(ctx context.Context, runID string) ([]string, 
 func expandRunID(path, runID string) string {
 	return strings.ReplaceAll(path, "{run_id}", runID)
 }
-
-var _ = json.Marshal

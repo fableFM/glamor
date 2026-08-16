@@ -17,7 +17,6 @@ import (
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/events"
-	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 )
 
 const componentName = "controller/ws"
@@ -83,7 +82,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	runID := r.URL.Query().Get("run_id")
 	if runID == "" {
-		runID = eventsrep.RunIDAll
+		runID = dtorep.RunIDAll
 	}
 	lastEventID, err := strconv.ParseInt(r.URL.Query().Get("last_event_id"), 10, 64)
 	if err != nil {

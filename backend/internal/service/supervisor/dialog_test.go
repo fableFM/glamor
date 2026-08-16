@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
+	"github.com/fableFM/glamor/internal/service/runsapi"
 	"github.com/fableFM/glamor/internal/service/supervisor"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
 )
 
 // E2E D-20/D-21: вопросы как артефакт → гейт question → ответ → resume с
@@ -47,7 +47,7 @@ func TestQuestionAnswerFlow(t *testing.T) {
 
 	// ответ → ре-вход этапа с ответом (D-20)
 	answer := "используй sqlite"
-	already, err := f.machine.ResolveGateAPI(ctx, questionGate.ID, usecase.GateActionAnswer, &answer)
+	_, already, err := f.runsSvc.ResolveGateAPI(ctx, questionGate.ID, runsapi.GateActionAnswer, &answer)
 	require.NoError(t, err)
 	assert.False(t, already)
 
@@ -73,7 +73,7 @@ func TestQuestionAnswerFlow(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond, "plan_approval gate must open")
 
 	// approve → ран двигается к succeeded
-	_, err = f.machine.ResolveGateAPI(ctx, approvalGate.ID, usecase.GateActionApprove, nil)
+	_, _, err = f.runsSvc.ResolveGateAPI(ctx, approvalGate.ID, runsapi.GateActionApprove, nil)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -103,7 +103,7 @@ func TestSteerInterruptFlow(t *testing.T) {
 
 	stage := f.latestStage(t)
 	message := "хватит, используй sqlite вместо файлов"
-	_, err := f.machine.InterruptStageSteer(ctx, stage.ID, message)
+	_, err := f.runsSvc.InterruptStageSteer(ctx, stage.ID, message)
 	require.NoError(t, err)
 
 	// steer-резюм: новая попытка с сообщением в промпте
@@ -128,7 +128,7 @@ func TestQueueNote(t *testing.T) {
 	f := newFixture(t, "testdata/success.sh", specWithArtifact, nil)
 	ctx := context.Background()
 
-	note, err := f.machine.CreateNote(ctx, f.runID, "не забудь про миграции", "note-1")
+	note, err := f.runsSvc.CreateNote(ctx, f.runID, "не забудь про миграции", "note-1")
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {

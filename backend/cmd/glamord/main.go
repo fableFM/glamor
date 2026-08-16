@@ -26,14 +26,17 @@ import (
 	"github.com/fableFM/glamor/internal/harness/qwen"
 	"github.com/fableFM/glamor/internal/repository"
 	artifactsrep "github.com/fableFM/glamor/internal/repository/artifacts"
+	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
 	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
 	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
+	"github.com/fableFM/glamor/internal/service/catalog"
+	"github.com/fableFM/glamor/internal/service/runsapi"
+	"github.com/fableFM/glamor/internal/service/runsmachine"
 	"github.com/fableFM/glamor/internal/service/supervisor"
-	runsusecase "github.com/fableFM/glamor/internal/usecase/runs"
 	// регистрация goose-миграций (D-05)
 	_ "github.com/fableFM/glamor/migrations"
 )
@@ -97,13 +100,30 @@ func run() error {
 		return err
 	}
 
+	// репозитории конструируются один раз (ручной DI, D-80) и раздаются
+	// всем потребителям готовыми интерфейсами
+	runsRepo := runsrep.NewRepository(db)
+	stagesRepo := stagesrep.NewRepository(db)
+	gatesRepo := gatesrep.NewRepository(db)
+	pipelinesRepo := pipelinesrep.NewRepository(db)
+	projectsRepo := projectsrep.NewRepository(db)
+	notesRepo := notesrep.NewRepository(db)
+	artifactsRepo := artifactsrep.NewRepository(db)
+	eventsRepo := eventsrep.NewRepository(db)
+	txm := repository.NewTxManager(db)
+
 	// журнал событий + WS hub (D-04, D-11)
 	hub := events.NewHub()
-	journal := events.NewJournal(db, hub)
+	journal := events.NewJournal(eventsRepo, txm, hub)
 
-	// стейт-машина поверх журнала (события переходов → hub после коммита)
-	machine := runsusecase.NewMachine(db, journal)
-	machine.SetTxExecutor(journal)
+	// стейт-машина поверх журнала (транзакции машины публикуют события в
+	// Hub после коммита: journal — одновременно TxExecutor и EventAppender)
+	machine := runsmachine.NewMachine(runsRepo, stagesRepo, gatesRepo,
+		pipelinesRepo, projectsRepo, notesRepo, journal, journal)
+
+	// API-сценарии ранов (идемпотентность, git-preflight) поверх машины
+	runsSvc := runsapi.New(machine, journal, journal,
+		runsRepo, stagesRepo, notesRepo, projectsRepo, pipelinesRepo, gatesRepo)
 
 	// startup recovery (D-15, T-12): сироты → interrupted → auto-resume;
 	// stop_requested_by=daemon прошлого shutdown — очищается для resume
@@ -118,8 +138,8 @@ func run() error {
 
 	// git-контур (T-10): preflight при создании рана, имена веток,
 	// prepare/branch-check в supervisor'е
-	machine.SetPreflight(gitx.Preflight)
-	machine.SetBranchNamer(gitx.SuggestBranch)
+	runsSvc.SetPreflight(gitx.Preflight)
+	runsSvc.SetBranchNamer(gitx.SuggestBranch)
 
 	// harness-реестр (T-06..T-08): проверка бинарей при старте
 	registry := harness.NewRegistry(cfg.Harnesses)
@@ -142,9 +162,7 @@ func run() error {
 	supCfg.MaxParallel = cfg.Supervisor.MaxParallel
 	supCfg.MaxAutoResumes = cfg.Supervisor.MaxAutoResumes
 	sup := supervisor.New(machine, registry, journal, supCfg, nil,
-		runsrep.NewRepository(db), stagesrep.NewRepository(db),
-		projectsrep.NewRepository(db), pipelinesrep.NewRepository(db),
-		notesrep.NewRepository(db))
+		runsRepo, stagesRepo, projectsRepo, pipelinesRepo, notesRepo)
 	sup.SetPostRunHook(func(ctx context.Context, run *dtorep.Run, projectPath string) error {
 		return gitx.PrepareBranch(ctx, projectPath, run.BaseBranch, run.Branch)
 	})
@@ -155,16 +173,10 @@ func run() error {
 
 	draining := &atomic.Bool{}
 	rest := httpctrl.NewHandler(httpctrl.Deps{
-		Draining:  draining,
-		Machine:   machine,
-		Journal:   journal,
-		Projects:  projectsrep.NewRepository(db),
-		Pipelines: pipelinesrep.NewRepository(db),
-		Runs:      runsrep.NewRepository(db),
-		Stages:    stagesrep.NewRepository(db),
-		Gates:     gatesrep.NewRepository(db),
-		Artifacts: artifactsrep.NewRepository(db),
-		Notes:     notesrep.NewRepository(db),
+		Draining: draining,
+		Machine:  runsSvc,
+		API: catalog.New(projectsRepo, pipelinesRepo, runsRepo, stagesRepo,
+			gatesRepo, artifactsRepo, notesRepo, journal),
 		Token:     cfg.Security.Token,
 		Version:   version,
 		Harnesses: availableHarnesses,

@@ -10,8 +10,16 @@ import (
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/events"
+	"github.com/fableFM/glamor/internal/repository"
+	eventsrep "github.com/fableFM/glamor/internal/repository/events"
+	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
+	notesrep "github.com/fableFM/glamor/internal/repository/notes"
+	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
+	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
+	runsrep "github.com/fableFM/glamor/internal/repository/runs"
+	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
 	"github.com/fableFM/glamor/internal/repository/testdb"
-	machine "github.com/fableFM/glamor/internal/usecase/runs"
+	machine "github.com/fableFM/glamor/internal/service/runsmachine"
 )
 
 // Машина (T-03) через Journal (T-04): переход состояния публикует событие
@@ -22,10 +30,13 @@ func TestMachineTransitions_PublishToHub(t *testing.T) {
 	runID := testdb.SeedRun(t, db)
 
 	hub := events.NewHub()
-	journal := events.NewJournal(db, hub)
+	journal := events.NewJournal(eventsrep.NewRepository(db), repository.NewTxManager(db), hub)
 
-	m := machine.NewMachine(db, journal)
-	m.SetTxExecutor(journal)
+	m := machine.NewMachine(
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		gatesrep.NewRepository(db), pipelinesrep.NewRepository(db),
+		projectsrep.NewRepository(db), notesrep.NewRepository(db),
+		journal, journal)
 
 	sub, unsubscribe := hub.Subscribe(runID)
 	defer unsubscribe()

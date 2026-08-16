@@ -1,33 +1,33 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync/atomic"
 
 	"github.com/fableFM/glamor/internal/controller/http/genapi"
-	"github.com/fableFM/glamor/internal/events"
-	artifactsrep "github.com/fableFM/glamor/internal/repository/artifacts"
-	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
-	notesrep "github.com/fableFM/glamor/internal/repository/notes"
-	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
-	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
-	runsrep "github.com/fableFM/glamor/internal/repository/runs"
-	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
+	"github.com/fableFM/glamor/internal/dto/dtorep"
+	"github.com/fableFM/glamor/internal/service/catalog"
+	"github.com/fableFM/glamor/internal/service/runsapi"
 )
 
+// Machine — методы стейт-машины, нужные REST-контроллеру. Интерфейс
+// объявлен у потребителя (D-80); реализация — сценарии service/runsapi.
+type Machine interface {
+	CreateRun(ctx context.Context, params runsapi.CreateRunParams) (run *dtorep.Run, alreadyExisted bool, err error)
+	StopRun(ctx context.Context, runID string) (*dtorep.Run, error)
+	ResumeRun(ctx context.Context, runID string) (*dtorep.Run, error)
+	CreateNote(ctx context.Context, runID, text, idempotencyKey string) (*dtorep.Note, error)
+	InterruptStageSteer(ctx context.Context, stageID int64, message string) (*dtorep.Stage, error)
+	ResolveGateAPI(ctx context.Context, gateID string, action runsapi.GateAction, text *string) (gate *dtorep.Gate, alreadyResolved bool, err error)
+}
+
 // Deps — зависимости REST-контроллера (ручной DI из main, D-80).
+// Контроллер работает только через service-слой, репозитории не знает.
 type Deps struct {
-	Machine   *usecase.Machine
-	Journal   *events.Journal
-	Projects  projectsrep.RepositoryWithTX
-	Pipelines pipelinesrep.RepositoryWithTX
-	Runs      runsrep.RepositoryWithTX
-	Stages    stagesrep.RepositoryWithTX
-	Gates     gatesrep.RepositoryWithTX
-	Artifacts artifactsrep.RepositoryWithTX
-	Notes     notesrep.RepositoryWithTX
+	Machine Machine
+	API     *catalog.Service
 
 	Token     string // D-08; пустой = auth выключен (dev)
 	Version   string
@@ -48,14 +48,7 @@ func NewHandler(deps Deps) http.Handler {
 	h := &handlers{
 		draining:  draining,
 		machine:   deps.Machine,
-		journal:   deps.Journal,
-		projects:  deps.Projects,
-		pipelines: deps.Pipelines,
-		runs:      deps.Runs,
-		stages:    deps.Stages,
-		gates:     deps.Gates,
-		artifacts: deps.Artifacts,
-		notes:     deps.Notes,
+		api:       deps.API,
 		version:   deps.Version,
 		harnesses: deps.Harnesses,
 	}

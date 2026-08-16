@@ -18,7 +18,7 @@ import (
 	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
+	runsmachine "github.com/fableFM/glamor/internal/service/runsmachine"
 )
 
 const componentName = "service/supervisor"
@@ -41,7 +41,7 @@ func DefaultConfig(runsDir string) Config {
 		StallTimeout:       120 * time.Second,
 		KillGrace:          10 * time.Second,
 		StageTimeout:       60 * time.Minute,
-		MaxAutoResumes:     usecase.MaxResumeCount,
+		MaxAutoResumes:     runsmachine.MaxResumeCount,
 		Backoff:            []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute},
 		RetriableThreshold: 3,
 		MaxParallel:        4,
@@ -54,7 +54,7 @@ func DefaultConfig(runsDir string) Config {
 type LaunchContext struct {
 	Run           *dtorep.Run
 	Stage         *dtorep.Stage // новая попытка (pending)
-	StageSpec     usecase.StageSpec
+	StageSpec     runsmachine.StageSpec
 	PrevSessionID string   // session_id предыдущей попытки (resume, D-16)
 	IsResume      bool     // auto-resume после interrupted
 	SteerMessages []string // сообщения Interrupt&Steer / queue notes (T-11)
@@ -77,7 +77,7 @@ type OnStageSucceeded func(ctx context.Context, run *dtorep.Run, stage *dtorep.S
 
 // Supervisor — контур этапов. Один экземпляр на демон.
 type Supervisor struct {
-	machine   *usecase.Machine
+	machine   *runsmachine.Machine
 	registry  *harness.Registry
 	journal   *events.Journal
 	cfg       Config
@@ -104,7 +104,7 @@ type Supervisor struct {
 	wg          sync.WaitGroup
 }
 
-func New(machine *usecase.Machine, registry *harness.Registry, journal *events.Journal,
+func New(machine *runsmachine.Machine, registry *harness.Registry, journal *events.Journal,
 	cfg Config, prompt PromptBuilder,
 	runs runsrep.RepositoryWithTX, stages stagesrep.RepositoryWithTX,
 	projects projectsrep.RepositoryWithTX, pipelines pipelinesrep.RepositoryWithTX,
@@ -244,10 +244,10 @@ func (s *Supervisor) processRun(ctx context.Context, run *dtorep.Run) error {
 	}
 
 	switch action.Kind {
-	case usecase.ActionNone, usecase.ActionWaitStage, usecase.ActionWaitGate:
+	case runsmachine.ActionNone, runsmachine.ActionWaitStage, runsmachine.ActionWaitGate:
 		return nil
 
-	case usecase.ActionStartRun:
+	case runsmachine.ActionStartRun:
 		if s.postRun != nil {
 			project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
 			if err != nil {
@@ -259,7 +259,7 @@ func (s *Supervisor) processRun(ctx context.Context, run *dtorep.Run) error {
 		}
 		return s.machine.TransitionRun(ctx, run.ID, dtorep.RunStateRunning)
 
-	case usecase.ActionStartStage:
+	case runsmachine.ActionStartStage:
 		stage := action.Stage
 		if stage == nil {
 			stage, err = s.machine.StartStage(ctx, run.ID, action.StageKey, action.Harness)
@@ -269,7 +269,7 @@ func (s *Supervisor) processRun(ctx context.Context, run *dtorep.Run) error {
 		}
 		return s.launchStage(ctx, run, stage)
 
-	case usecase.ActionResumeStage:
+	case runsmachine.ActionResumeStage:
 		// если для этой стадии уже назначен backoff-resume — ждём его
 		s.mu.Lock()
 		_, scheduled := s.resumeAfter[action.Stage.ID]
@@ -280,8 +280,8 @@ func (s *Supervisor) processRun(ctx context.Context, run *dtorep.Run) error {
 		// recovery/interrupted без backoff (рестарт демона) — резюмим сразу
 		return s.resumeStage(ctx, action.Stage)
 
-	case usecase.ActionEscalate:
-		_, err := s.machine.OpenGate(ctx, usecase.OpenGateRequest{
+	case runsmachine.ActionEscalate:
+		_, err := s.machine.OpenGate(ctx, runsmachine.OpenGateRequest{
 			RunID:       run.ID,
 			StageID:     &action.Stage.ID,
 			Kind:        dtorep.GateKindEscalation,
@@ -290,7 +290,7 @@ func (s *Supervisor) processRun(ctx context.Context, run *dtorep.Run) error {
 		})
 		return err
 
-	case usecase.ActionFinishRun:
+	case runsmachine.ActionFinishRun:
 		return s.machine.TransitionRun(ctx, run.ID, action.RunState)
 	}
 	return nil

@@ -1,5 +1,5 @@
 // Package dtorep — DTO репозиторного слоя (D-80): все типы, пересекающие
-// границу repository ↔ service/usecase. Модели БД приватны в пакетах
+// границу repository ↔ service. Модели БД приватны в пакетах
 // internal/repository/<domain>, наружу отдаются только эти типы.
 package dtorep
 
@@ -191,6 +191,11 @@ type CreateGateRequest struct {
 	ContextJSON    string
 	IdempotencyKey string
 }
+
+// RunIDAll — специальный run_id журнала для «все раны» (wildcard-подписка
+// /ws, инбокс гейтов). Доменная константа журнала: используется
+// репозиторием events, шиной events и контроллерами.
+const RunIDAll = "*"
 
 // Event — событие append-only журнала (D-11).
 type Event struct {

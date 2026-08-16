@@ -1,4 +1,4 @@
-package runs_test
+package runsmachine_test
 
 import (
 	"context"
@@ -13,19 +13,28 @@ import (
 
 	"github.com/fableFM/glamor/internal/cstmerrors"
 	"github.com/fableFM/glamor/internal/dto/dtorep"
+	"github.com/fableFM/glamor/internal/repository"
 	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
+	notesrep "github.com/fableFM/glamor/internal/repository/notes"
+	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
+	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
 	"github.com/fableFM/glamor/internal/repository/testdb"
-	machine "github.com/fableFM/glamor/internal/usecase/runs"
+	machine "github.com/fableFM/glamor/internal/service/runsmachine"
 )
 
 func newMachine(t *testing.T) (*machine.Machine, string, *sql.DB) {
 	t.Helper()
 	db := testdb.New(t)
 	runID := testdb.SeedRun(t, db) // пайплайн: plan → code
-	return machine.NewMachine(db, nil), runID, db
+	m := machine.NewMachine(
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		gatesrep.NewRepository(db), pipelinesrep.NewRepository(db),
+		projectsrep.NewRepository(db), notesrep.NewRepository(db),
+		repository.NewTxManager(db), nil)
+	return m, runID, db
 }
 
 // Разрешённые переходы рана + запрещённые = ErrInvalidTransition.

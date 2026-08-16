@@ -15,14 +15,14 @@ import (
 	"github.com/fableFM/glamor/internal/harness"
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
+	"github.com/fableFM/glamor/internal/service/runsmachine"
 	"github.com/fableFM/glamor/internal/service/supervisor"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
 )
 
 // restartFixture — два supervisor'а на одной БД (симуляция рестарта демона).
 type restartFixture struct {
 	db       *sql.DB
-	machine  *usecase.Machine
+	machine  *runsmachine.Machine
 	journal  *events.Journal
 	runID    string
 	workDir  string

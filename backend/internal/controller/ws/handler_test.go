@@ -18,6 +18,8 @@ import (
 	"github.com/fableFM/glamor/internal/controller/ws"
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/events"
+	"github.com/fableFM/glamor/internal/repository"
+	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	"github.com/fableFM/glamor/internal/repository/testdb"
 )
 
@@ -33,7 +35,7 @@ func newFixture(t *testing.T, token string) *fixture {
 	db := testdb.New(t)
 	runID := testdb.SeedRun(t, db)
 	hub := events.NewHub()
-	journal := events.NewJournal(db, hub)
+	journal := events.NewJournal(eventsrep.NewRepository(db), repository.NewTxManager(db), hub)
 	server := httptest.NewServer(ws.NewHandler(journal, hub, token))
 	t.Cleanup(server.Close)
 	return &fixture{journal: journal, hub: hub, server: server, runID: runID}

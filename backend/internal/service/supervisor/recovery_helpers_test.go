@@ -13,14 +13,18 @@ import (
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/events"
 	"github.com/fableFM/glamor/internal/harness"
+	"github.com/fableFM/glamor/internal/repository"
+	eventsrep "github.com/fableFM/glamor/internal/repository/events"
+	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
 	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
 	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
 	"github.com/fableFM/glamor/internal/repository/testdb"
+	"github.com/fableFM/glamor/internal/service/runsapi"
+	"github.com/fableFM/glamor/internal/service/runsmachine"
 	"github.com/fableFM/glamor/internal/service/supervisor"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
 	"github.com/fableFM/glamor/pkg/uuid"
 )
 
@@ -47,11 +51,18 @@ func newRestartFixture(t *testing.T, script string) *restartFixture {
 	require.NoError(t, err)
 
 	hub := events.NewHub()
-	journal := events.NewJournal(db, hub)
-	machine := usecase.NewMachine(db, journal)
-	machine.SetTxExecutor(journal)
+	journal := events.NewJournal(eventsrep.NewRepository(db), repository.NewTxManager(db), hub)
+	machine := runsmachine.NewMachine(
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		gatesrep.NewRepository(db), pipelinesrep.NewRepository(db),
+		projectsrep.NewRepository(db), notesrep.NewRepository(db),
+		journal, journal)
+	runsSvc := runsapi.New(machine, journal, journal,
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		notesrep.NewRepository(db), projectsrep.NewRepository(db),
+		pipelinesrep.NewRepository(db), gatesrep.NewRepository(db))
 
-	run, already, err := machine.CreateRun(ctx, usecase.CreateRunParams{
+	run, already, err := runsSvc.CreateRun(ctx, runsapi.CreateRunParams{
 		ProjectID:         projectID,
 		PipelineVersionID: pipelineID,
 		TaskText:          "restart test",

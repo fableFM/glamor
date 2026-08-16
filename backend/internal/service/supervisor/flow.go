@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
-	eventsrep "github.com/fableFM/glamor/internal/repository/events"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
+	runsmachine "github.com/fableFM/glamor/internal/service/runsmachine"
 )
 
 // launchStage запускает попытку этапа в отдельной горутине через семафор
@@ -295,25 +294,25 @@ func (s *Supervisor) checkArtifact(ctx context.Context, stage *dtorep.Stage) (bo
 }
 
 // stageSpecFor — спека этапа из пайплайна рана (модель/effort/артефакт).
-func (s *Supervisor) stageSpecFor(ctx context.Context, stage *dtorep.Stage) (usecase.StageSpec, error) {
+func (s *Supervisor) stageSpecFor(ctx context.Context, stage *dtorep.Stage) (runsmachine.StageSpec, error) {
 	run, err := s.runs.GetRunByID(ctx, stage.RunID)
 	if err != nil {
-		return usecase.StageSpec{}, err
+		return runsmachine.StageSpec{}, err
 	}
 	pipeline, err := s.pipelines.GetPipelineByID(ctx, run.PipelineVersionID)
 	if err != nil {
-		return usecase.StageSpec{}, err
+		return runsmachine.StageSpec{}, err
 	}
-	spec, err := usecase.ParseSpec(pipeline.SpecJSON)
+	spec, err := runsmachine.ParseSpec(pipeline.SpecJSON)
 	if err != nil {
-		return usecase.StageSpec{}, err
+		return runsmachine.StageSpec{}, err
 	}
 	for _, st := range spec.Stages {
 		if st.Key == stage.StageKey {
 			return st, nil
 		}
 	}
-	return usecase.StageSpec{}, fmt.Errorf("stage %q not found in pipeline spec", stage.StageKey)
+	return runsmachine.StageSpec{}, fmt.Errorf("stage %q not found in pipeline spec", stage.StageKey)
 }
 
 func (s *Supervisor) runAndProject(ctx context.Context, runID string) (*dtorep.Project, *dtorep.Run, error) {
@@ -355,5 +354,3 @@ func marshalEventPayload(v any) string {
 	}
 	return string(data)
 }
-
-var _ = eventsrep.RunIDAll

@@ -22,10 +22,11 @@ type Journal struct {
 	hub  *Hub
 }
 
-func NewJournal(db *sql.DB, hub *Hub) *Journal {
+// NewJournal собирает журнал из готовых зависимостей (ручной DI в main, D-80).
+func NewJournal(repo eventsrep.RepositoryWithTX, txm *repository.TxManager, hub *Hub) *Journal {
 	return &Journal{
-		repo: eventsrep.NewRepository(db),
-		txm:  repository.NewTxManager(db),
+		repo: repo,
+		txm:  txm,
 		hub:  hub,
 	}
 }
@@ -69,7 +70,7 @@ func (j *Journal) Append(ctx context.Context, tx *sql.Tx, ev dtorep.Event) error
 }
 
 // Replay — страница событий с id > afterID (догон клиентов по last_event_id).
-// runID = eventsrep.RunIDAll («*») — события всех ранов.
+// runID = dtorep.RunIDAll («*») — события всех ранов.
 func (j *Journal) Replay(ctx context.Context, runID string, afterID int64, limit int) ([]dtorep.Event, error) {
 	if limit <= 0 {
 		limit = 500

@@ -131,3 +131,17 @@ open → answered | approved | rejected | expired
 - Защита от потери работы: preflight (чистый чекаут / force, D-34) и
   branch_mismatch-check перед каждым этапом (пользователь переключил
   ветку руками → этап не стартует, событие run.branch_mismatch).
+
+## Дополнение (2026-08-16, fix-task-0 F-03): перенос реализации
+
+- Реализация стейт-машины перенесена из `internal/usecase/runs/` в
+  `internal/service/runsmachine/` (machine.go, transitions.go, action.go,
+  spec.go): CAS-переходы, гейты, recovery — доменная бизнес-логика,
+  service-слой по D-80. Поведение и таблицы переходов не изменились.
+- В `internal/usecase/runs/` остались API-сценарии (CreateRun, StopRun,
+  ResumeRun, ResolveGateAPI, InterruptStageSteer, CreateNote) — тип
+  `Usecase` над `*runsmachine.Machine`; supervisor перенесён в
+  `internal/usecase/supervisor/` (оркестратор тика, usecase → service).
+- *(2026-08-16, fix-task-1):* слой usecase упразднён — API-сценарии
+  переехали в `internal/service/runsapi`, supervisor вернулся в
+  `internal/service/supervisor`, read-фасад — `internal/service/catalog`.

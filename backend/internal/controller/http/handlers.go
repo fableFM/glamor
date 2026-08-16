@@ -7,30 +7,15 @@ import (
 
 	"github.com/fableFM/glamor/internal/controller/http/genapi"
 	"github.com/fableFM/glamor/internal/dto/dtorep"
-	"github.com/fableFM/glamor/internal/events"
-	artifactsrep "github.com/fableFM/glamor/internal/repository/artifacts"
-	eventsrep "github.com/fableFM/glamor/internal/repository/events"
-	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
-	notesrep "github.com/fableFM/glamor/internal/repository/notes"
-	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
-	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
-	runsrep "github.com/fableFM/glamor/internal/repository/runs"
-	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
+	"github.com/fableFM/glamor/internal/service/catalog"
+	"github.com/fableFM/glamor/internal/service/runsapi"
 )
 
 // handlers — реализация genapi.StrictServerInterface.
 type handlers struct {
 	draining  *atomic.Bool
-	machine   *usecase.Machine
-	journal   *events.Journal
-	projects  projectsrep.RepositoryWithTX
-	pipelines pipelinesrep.RepositoryWithTX
-	runs      runsrep.RepositoryWithTX
-	stages    stagesrep.RepositoryWithTX
-	gates     gatesrep.RepositoryWithTX
-	artifacts artifactsrep.RepositoryWithTX
-	notes     notesrep.RepositoryWithTX
+	machine   Machine
+	api       *catalog.Service
 	version   string
 	harnesses []string
 }
@@ -58,7 +43,7 @@ func (h *handlers) EventsWs(_ context.Context, _ genapi.EventsWsRequestObject) (
 // --- projects ----------------------------------------------------------------
 
 func (h *handlers) ListProjects(ctx context.Context, _ genapi.ListProjectsRequestObject) (genapi.ListProjectsResponseObject, error) {
-	projects, err := h.projects.ListProjects(ctx)
+	projects, err := h.api.ListProjects(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -66,13 +51,7 @@ func (h *handlers) ListProjects(ctx context.Context, _ genapi.ListProjectsReques
 }
 
 func (h *handlers) CreateProject(ctx context.Context, req genapi.CreateProjectRequestObject) (genapi.CreateProjectResponseObject, error) {
-	// идемпотентность по path (UNIQUE): существующий проект → 200
-	existing, err := h.projects.GetProjectByPath(ctx, req.Body.Path)
-	if err == nil {
-		return genapi.CreateProject200JSONResponse(mapProject(existing)), nil
-	}
-
-	id, err := h.projects.CreateProject(ctx, dtorep.CreateProjectRequest{
+	project, alreadyExisted, err := h.api.CreateProject(ctx, dtorep.CreateProjectRequest{
 		Path:          req.Body.Path,
 		Name:          req.Body.Name,
 		DefaultBranch: deref(req.Body.DefaultBranch),
@@ -83,41 +62,21 @@ func (h *handlers) CreateProject(ctx context.Context, req genapi.CreateProjectRe
 		return genapi.CreateProjectdefaultJSONResponse{Body: e, StatusCode: status}, nil
 	}
 
-	project, err := h.projects.GetProjectByID(ctx, id)
-	if err != nil {
-		return nil, err
+	// идемпотентность по path (UNIQUE): существующий проект → 200
+	if alreadyExisted {
+		return genapi.CreateProject200JSONResponse(mapProject(project)), nil
 	}
 	return genapi.CreateProject201JSONResponse(mapProject(project)), nil
 }
 
 func (h *handlers) GetProject(ctx context.Context, req genapi.GetProjectRequestObject) (genapi.GetProjectResponseObject, error) {
-	project, err := h.projects.GetProjectByID(ctx, req.Id)
+	detail, err := h.api.GetProjectDetail(ctx, req.Id)
 	if err != nil {
 		e, status := errorToResponse(err)
 		return genapi.GetProjectdefaultJSONResponse{Body: e, StatusCode: status}, nil
 	}
 
-	activeStates := []dtorep.RunState{
-		dtorep.RunStateDraft, dtorep.RunStateRunning, dtorep.RunStateWaitingGate,
-	}
-	activeRuns, err := h.runs.ListRuns(ctx, dtorep.ListRunsRequest{
-		ProjectID: &req.Id,
-		States:    activeStates,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	openGates := 0
-	for _, run := range activeRuns {
-		gates, err := h.gates.ListOpenGates(ctx, run.ID)
-		if err != nil {
-			return nil, err
-		}
-		openGates += len(gates)
-	}
-
-	p := mapProject(project)
+	p := mapProject(detail.Project)
 	return genapi.GetProject200JSONResponse(genapi.ProjectDetail{
 		Id:            p.Id,
 		Path:          p.Path,
@@ -125,22 +84,16 @@ func (h *handlers) GetProject(ctx context.Context, req genapi.GetProjectRequestO
 		DefaultBranch: p.DefaultBranch,
 		IdeCommand:    p.IdeCommand,
 		CreatedAt:     p.CreatedAt,
-		ActiveRuns:    mapSlice(activeRuns, mapRun),
-		OpenGates:     openGates,
+		ActiveRuns:    mapSlice(detail.ActiveRuns, mapRun),
+		OpenGates:     detail.OpenGates,
 	}), nil
 }
 
 func (h *handlers) PatchProject(ctx context.Context, req genapi.PatchProjectRequestObject) (genapi.PatchProjectResponseObject, error) {
-	err := h.projects.UpdateProject(ctx, req.Id, dtorep.PatchProjectRequest{
+	project, err := h.api.PatchProject(ctx, req.Id, dtorep.PatchProjectRequest{
 		DefaultBranch: req.Body.DefaultBranch,
 		IDECommand:    req.Body.IdeCommand,
 	})
-	if err != nil {
-		e, status := errorToResponse(err)
-		return genapi.PatchProjectdefaultJSONResponse{Body: e, StatusCode: status}, nil
-	}
-
-	project, err := h.projects.GetProjectByID(ctx, req.Id)
 	if err != nil {
 		e, status := errorToResponse(err)
 		return genapi.PatchProjectdefaultJSONResponse{Body: e, StatusCode: status}, nil
@@ -151,7 +104,7 @@ func (h *handlers) PatchProject(ctx context.Context, req genapi.PatchProjectRequ
 // --- pipelines ---------------------------------------------------------------
 
 func (h *handlers) ListProjectPipelines(ctx context.Context, req genapi.ListProjectPipelinesRequestObject) (genapi.ListProjectPipelinesResponseObject, error) {
-	pipelines, err := h.pipelines.ListPipelinesForProject(ctx, req.Id)
+	pipelines, err := h.api.ListProjectPipelines(ctx, req.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -159,18 +112,13 @@ func (h *handlers) ListProjectPipelines(ctx context.Context, req genapi.ListProj
 }
 
 func (h *handlers) GetPipeline(ctx context.Context, req genapi.GetPipelineRequestObject) (genapi.GetPipelineResponseObject, error) {
-	pipeline, err := h.pipelines.GetPipelineByID(ctx, req.Id)
+	detail, err := h.api.GetPipelineDetail(ctx, req.Id)
 	if err != nil {
 		e, status := errorToResponse(err)
 		return genapi.GetPipelinedefaultJSONResponse{Body: e, StatusCode: status}, nil
 	}
 
-	versions, err := h.pipelines.ListPipelineVersions(ctx, pipeline.ProjectID, pipeline.Name)
-	if err != nil {
-		return nil, err
-	}
-
-	p := mapPipeline(pipeline)
+	p := mapPipeline(detail.Pipeline)
 	return genapi.GetPipeline200JSONResponse(genapi.PipelineDetail{
 		Id:              p.Id,
 		ProjectId:       p.ProjectId,
@@ -179,7 +127,7 @@ func (h *handlers) GetPipeline(ctx context.Context, req genapi.GetPipelineReques
 		ParentVersionId: p.ParentVersionId,
 		SpecJson:        p.SpecJson,
 		CreatedAt:       p.CreatedAt,
-		Versions:        mapSlice(versions, mapPipeline),
+		Versions:        mapSlice(detail.Versions, mapPipeline),
 	}), nil
 }
 
@@ -198,7 +146,7 @@ func (h *handlers) CreateRun(ctx context.Context, req genapi.CreateRunRequestObj
 		idempotencyKey = *req.Params.IdempotencyKey
 	}
 
-	run, alreadyExisted, err := h.machine.CreateRun(ctx, usecase.CreateRunParams{
+	run, alreadyExisted, err := h.machine.CreateRun(ctx, runsapi.CreateRunParams{
 		ProjectID:         req.Body.ProjectId,
 		PipelineVersionID: req.Body.PipelineVersionId,
 		TaskText:          req.Body.TaskText,
@@ -232,7 +180,7 @@ func (h *handlers) ListRuns(ctx context.Context, req genapi.ListRunsRequestObjec
 		filter.Limit = *req.Params.Limit
 	}
 
-	runs, err := h.runs.ListRuns(ctx, filter)
+	runs, err := h.api.ListRuns(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -240,30 +188,13 @@ func (h *handlers) ListRuns(ctx context.Context, req genapi.ListRunsRequestObjec
 }
 
 func (h *handlers) GetRun(ctx context.Context, req genapi.GetRunRequestObject) (genapi.GetRunResponseObject, error) {
-	run, err := h.runs.GetRunByID(ctx, req.Id)
+	detail, err := h.api.GetRunDetail(ctx, req.Id)
 	if err != nil {
 		e, status := errorToResponse(err)
 		return genapi.GetRundefaultJSONResponse{Body: e, StatusCode: status}, nil
 	}
 
-	stages, err := h.stages.ListStagesByRun(ctx, req.Id)
-	if err != nil {
-		return nil, err
-	}
-	gates, err := h.gates.ListGatesByRun(ctx, req.Id)
-	if err != nil {
-		return nil, err
-	}
-	artifacts, err := h.artifacts.ListArtifactsByRun(ctx, req.Id)
-	if err != nil {
-		return nil, err
-	}
-	notes, err := h.notes.ListNotesByRun(ctx, req.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	r := mapRun(run)
+	r := mapRun(detail.Run)
 	return genapi.GetRun200JSONResponse(genapi.RunDetail{
 		Id:                r.Id,
 		ProjectId:         r.ProjectId,
@@ -276,10 +207,10 @@ func (h *handlers) GetRun(ctx context.Context, req genapi.GetRunRequestObject) (
 		NotifyTg:          r.NotifyTg,
 		CreatedAt:         r.CreatedAt,
 		FinishedAt:        r.FinishedAt,
-		Stages:            mapSlice(stages, mapStage),
-		Gates:             mapSlice(gates, mapGate),
-		Artifacts:         mapSlice(artifacts, mapArtifact),
-		Notes:             mapSlice(notes, mapNote),
+		Stages:            mapSlice(detail.Stages, mapStage),
+		Gates:             mapSlice(detail.Gates, mapGate),
+		Artifacts:         mapSlice(detail.Artifacts, mapArtifact),
+		Notes:             mapSlice(detail.Notes, mapNote),
 	}), nil
 }
 
@@ -327,17 +258,13 @@ func (h *handlers) InterruptStage(ctx context.Context, req genapi.InterruptStage
 // --- gates -------------------------------------------------------------------
 
 func (h *handlers) ResolveGate(ctx context.Context, req genapi.ResolveGateRequestObject) (genapi.ResolveGateResponseObject, error) {
-	alreadyResolved, err := h.machine.ResolveGateAPI(ctx, req.Id,
-		usecase.GateAction(req.Body.Action), req.Body.Text)
+	gate, alreadyResolved, err := h.machine.ResolveGateAPI(ctx, req.Id,
+		runsapi.GateAction(req.Body.Action), req.Body.Text)
 	if err != nil {
 		e, status := errorToResponse(err)
 		return genapi.ResolveGatedefaultJSONResponse{Body: e, StatusCode: status}, nil
 	}
 
-	gate, err := h.gates.GetGateByID(ctx, req.Id)
-	if err != nil {
-		return nil, err
-	}
 	return genapi.ResolveGate200JSONResponse(genapi.ResolveGateResponse{
 		Gate:            mapGate(gate),
 		AlreadyResolved: alreadyResolved,
@@ -347,12 +274,6 @@ func (h *handlers) ResolveGate(ctx context.Context, req genapi.ResolveGateReques
 // --- events ------------------------------------------------------------------
 
 func (h *handlers) ListRunEvents(ctx context.Context, req genapi.ListRunEventsRequestObject) (genapi.ListRunEventsResponseObject, error) {
-	if _, err := h.runs.GetRunByID(ctx, req.Id); err != nil {
-		e, status := errorToResponse(err)
-		return genapi.ListRunEventsdefaultJSONResponse{Body: e, StatusCode: status}, nil
-	}
-
-	runID := req.Id
 	var afterID int64
 	if req.Params.AfterId != nil {
 		afterID = *req.Params.AfterId
@@ -362,11 +283,11 @@ func (h *handlers) ListRunEvents(ctx context.Context, req genapi.ListRunEventsRe
 		limit = *req.Params.Limit
 	}
 
-	evs, err := h.journal.Replay(ctx, runID, afterID, limit)
+	evs, err := h.api.ListRunEvents(ctx, req.Id, afterID, limit)
 	if err != nil {
-		return nil, err
+		e, status := errorToResponse(err)
+		return genapi.ListRunEventsdefaultJSONResponse{Body: e, StatusCode: status}, nil
 	}
-	_ = eventsrep.RunIDAll // run_id всегда конкретный в этом endpoint
 	return genapi.ListRunEvents200JSONResponse(mapSlice(evs, mapEvent)), nil
 }
 

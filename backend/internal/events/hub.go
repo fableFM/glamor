@@ -4,7 +4,6 @@ import (
 	"sync"
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
-	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 )
 
 // SubscriberBuffer — размер буфера подписчика. Переполнение = отключение
@@ -57,7 +56,7 @@ func (h *Hub) Publish(events ...dtorep.Event) {
 
 	for _, ev := range events {
 		for ch, runID := range h.subs {
-			if runID != eventsrep.RunIDAll && runID != ev.RunID {
+			if runID != dtorep.RunIDAll && runID != ev.RunID {
 				continue
 			}
 			select {

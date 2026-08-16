@@ -45,7 +45,7 @@ func (q *query) ReplayEvents(ctx context.Context, runID string, afterID int64, l
 	sb := sqlbuilder.SQLite.NewSelectBuilder()
 	sb.Select(eventColumns...).From("events")
 	sb.Where(sb.GreaterThan("id", afterID))
-	if runID != RunIDAll {
+	if runID != dtorep.RunIDAll {
 		sb.Where(sb.Equal("run_id", runID))
 	}
 	sb.OrderByAsc("id")

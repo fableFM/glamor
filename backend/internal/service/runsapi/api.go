@@ -1,4 +1,8 @@
-package runs
+// Package runsapi — API-сценарии ранов (D-80: service): создание рана с
+// идемпотентностью (D-12) и git-preflight'ом (T-10), stop/resume,
+// заметки, резолв гейтов с API-семантикой. CAS-переходы состояний
+// делегируются стейт-машине internal/service/runsmachine (ADR-001).
+package runsapi
 
 import (
 	"context"
@@ -10,11 +14,58 @@ import (
 
 	"github.com/fableFM/glamor/internal/cstmerrors"
 	"github.com/fableFM/glamor/internal/dto/dtorep"
+	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
+	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
+	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
+	"github.com/fableFM/glamor/internal/service/runsmachine"
 	"github.com/fableFM/glamor/pkg/uuid"
 )
+
+// Service — API-сценарии ранов. Стейт-машина (runsmachine) — за полем
+// machine; свои репозитории — для чтений и идемпотентности сценариев.
+type Service struct {
+	machine     *runsmachine.Machine
+	txm         runsmachine.TxExecutor
+	appender    runsmachine.EventAppender
+	runs        runsrep.RepositoryWithTX
+	stages      stagesrep.RepositoryWithTX
+	notes       notesrep.RepositoryWithTX
+	projects    projectsrep.RepositoryWithTX
+	pipelines   pipelinesrep.RepositoryWithTX
+	gates       gatesrep.RepositoryWithTX
+	preflight   PreflightFunc
+	branchNamer BranchNamerFunc
+}
+
+// New собирает сценарии из готовых зависимостей (ручной DI в main, D-80).
+// txm/appender — те же экземпляры, что у стейт-машины (events.Journal),
+// чтобы события tx попадали в Hub после коммита.
+func New(
+	machine *runsmachine.Machine,
+	txm runsmachine.TxExecutor,
+	appender runsmachine.EventAppender,
+	runs runsrep.RepositoryWithTX,
+	stages stagesrep.RepositoryWithTX,
+	notes notesrep.RepositoryWithTX,
+	projects projectsrep.RepositoryWithTX,
+	pipelines pipelinesrep.RepositoryWithTX,
+	gates gatesrep.RepositoryWithTX,
+) *Service {
+	return &Service{
+		machine:   machine,
+		txm:       txm,
+		appender:  appender,
+		runs:      runs,
+		stages:    stages,
+		notes:     notes,
+		projects:  projects,
+		pipelines: pipelines,
+		gates:     gates,
+	}
+}
 
 // CreateRunParams — параметры создания рана (POST /runs).
 type CreateRunParams struct {
@@ -34,8 +85,8 @@ type CreateRunParams struct {
 type PreflightFunc func(ctx context.Context, projectPath, baseBranch, branch string, force bool) error
 
 // SetPreflight подключает git-preflight (T-10).
-func (m *Machine) SetPreflight(fn PreflightFunc) {
-	m.preflight = fn
+func (u *Service) SetPreflight(fn PreflightFunc) {
+	u.preflight = fn
 }
 
 // BranchNamerFunc — генератор имени рабочей ветки из slug'а (T-10:
@@ -43,24 +94,24 @@ func (m *Machine) SetPreflight(fn PreflightFunc) {
 type BranchNamerFunc func(ctx context.Context, projectPath, slug string) (string, error)
 
 // SetBranchNamer подключает генератор имени ветки (T-10).
-func (m *Machine) SetBranchNamer(fn BranchNamerFunc) {
-	m.branchNamer = fn
+func (u *Service) SetBranchNamer(fn BranchNamerFunc) {
+	u.branchNamer = fn
 }
 
 // CreateRun создаёт ран в состоянии draft (старт этапов — supervisor, T-09).
 // Идемпотентность (D-12): повтор ключа возвращает первый ран
 // (alreadyExisted=true). Lock (D-33): активный ран на (project, branch) →
 // ErrRunLocked (частичный UNIQUE-индекс, enforced в БД).
-func (m *Machine) CreateRun(ctx context.Context, params CreateRunParams) (run *dtorep.Run, alreadyExisted bool, err error) {
+func (u *Service) CreateRun(ctx context.Context, params CreateRunParams) (run *dtorep.Run, alreadyExisted bool, err error) {
 	if params.IdempotencyKey == "" {
 		params.IdempotencyKey = uuid.New()
 	}
 
-	project, err := m.projects.GetProjectByID(ctx, params.ProjectID)
+	project, err := u.projects.GetProjectByID(ctx, params.ProjectID)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to load project: %w", err)
 	}
-	if _, err := m.pipelines.GetPipelineByID(ctx, params.PipelineVersionID); err != nil {
+	if _, err := u.pipelines.GetPipelineByID(ctx, params.PipelineVersionID); err != nil {
 		return nil, false, fmt.Errorf("failed to load pipeline: %w", err)
 	}
 
@@ -69,8 +120,8 @@ func (m *Machine) CreateRun(ctx context.Context, params CreateRunParams) (run *d
 	}
 	if params.Branch == "" {
 		slug := slugify(params.TaskText)
-		if m.branchNamer != nil {
-			branch, err := m.branchNamer(ctx, project.Path, slug)
+		if u.branchNamer != nil {
+			branch, err := u.branchNamer(ctx, project.Path, slug)
 			if err != nil {
 				return nil, false, fmt.Errorf("failed to suggest branch: %w", err)
 			}
@@ -80,14 +131,14 @@ func (m *Machine) CreateRun(ctx context.Context, params CreateRunParams) (run *d
 		}
 	}
 
-	if m.preflight != nil {
-		if err := m.preflight(ctx, project.Path, params.BaseBranch, params.Branch, params.Force); err != nil {
+	if u.preflight != nil {
+		if err := u.preflight(ctx, project.Path, params.BaseBranch, params.Branch, params.Force); err != nil {
 			return nil, false, err
 		}
 	}
 
 	runID := uuid.New()
-	err = m.runs.CreateRun(ctx, dtorep.CreateRunRequest{
+	err = u.runs.CreateRun(ctx, dtorep.CreateRunRequest{
 		ID:                runID,
 		ProjectID:         params.ProjectID,
 		PipelineVersionID: params.PipelineVersionID,
@@ -103,7 +154,7 @@ func (m *Machine) CreateRun(ctx context.Context, params CreateRunParams) (run *d
 	case err == nil:
 	case errors.Is(err, cstmerrors.ErrDuplicate):
 		// повтор ключа → первый ран; иначе — lock ветки (D-33)
-		existing, getErr := m.runs.GetRunByIdempotencyKey(ctx, params.IdempotencyKey)
+		existing, getErr := u.runs.GetRunByIdempotencyKey(ctx, params.IdempotencyKey)
 		if getErr == nil {
 			return existing, true, nil
 		}
@@ -113,7 +164,7 @@ func (m *Machine) CreateRun(ctx context.Context, params CreateRunParams) (run *d
 		return nil, false, err
 	}
 
-	run, err = m.runs.GetRunByID(ctx, runID)
+	run, err = u.runs.GetRunByID(ctx, runID)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to load created run: %w", err)
 	}
@@ -123,8 +174,8 @@ func (m *Machine) CreateRun(ctx context.Context, params CreateRunParams) (run *d
 // StopRun — остановка пользователем (D-14): run → stopped, running-стадии
 // помечаются stop_requested_by=user (auto-resume не сработает) и уходят в
 // interrupted; процессы добивает supervisor (T-09). Идемпотентно.
-func (m *Machine) StopRun(ctx context.Context, runID string) (*dtorep.Run, error) {
-	err := m.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+func (u *Service) StopRun(ctx context.Context, runID string) (*dtorep.Run, error) {
+	err := u.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		runsTx := runsrep.NewTx(tx)
 		stagesTx := stagesrep.NewTx(tx)
 
@@ -135,7 +186,7 @@ func (m *Machine) StopRun(ctx context.Context, runID string) (*dtorep.Run, error
 		if run.State == dtorep.RunStateStopped {
 			return nil // идемпотентный повтор
 		}
-		if err := m.transitionRunInTx(ctx, tx, runID, dtorep.RunStateStopped); err != nil {
+		if err := u.machine.TransitionRunInTx(ctx, tx, runID, dtorep.RunStateStopped); err != nil {
 			return err
 		}
 
@@ -158,8 +209,8 @@ func (m *Machine) StopRun(ctx context.Context, runID string) (*dtorep.Run, error
 			if !ok {
 				continue // стадия уже завершилась — не страшно
 			}
-			if err := appendStateEvent(ctx, tx, m.appender, runID, &st.ID,
-				EventKindStageStateChanged,
+			if err := runsmachine.AppendStateEvent(ctx, tx, u.appender, runID, &st.ID,
+				runsmachine.EventKindStageStateChanged,
 				string(dtorep.StageStateRunning), string(dtorep.StageStateInterrupted)); err != nil {
 				return err
 			}
@@ -169,15 +220,15 @@ func (m *Machine) StopRun(ctx context.Context, runID string) (*dtorep.Run, error
 	if err != nil {
 		return nil, err
 	}
-	return m.runs.GetRunByID(ctx, runID)
+	return u.runs.GetRunByID(ctx, runID)
 }
 
 // ResumeRun — ручной рестарт failed/interrupted рана (T-05):
 // failed → running (ручной переход, ADR-001 доп. 2026-08-16); дальше
 // supervisor тикает NextAction (resume interrupted-стадии и т.п.).
 // Идемпотентно: running/waiting_gate → no-op.
-func (m *Machine) ResumeRun(ctx context.Context, runID string) (*dtorep.Run, error) {
-	run, err := m.runs.GetRunByID(ctx, runID)
+func (u *Service) ResumeRun(ctx context.Context, runID string) (*dtorep.Run, error) {
+	run, err := u.runs.GetRunByID(ctx, runID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load run: %w", err)
 	}
@@ -186,11 +237,11 @@ func (m *Machine) ResumeRun(ctx context.Context, runID string) (*dtorep.Run, err
 	case dtorep.RunStateRunning, dtorep.RunStateWaitingGate:
 		return run, nil // идемпотентный повтор
 	case dtorep.RunStateFailed:
-		if err := m.TransitionRun(ctx, runID, dtorep.RunStateRunning); err != nil {
+		if err := u.machine.TransitionRun(ctx, runID, dtorep.RunStateRunning); err != nil {
 			return nil, err
 		}
 	case dtorep.RunStateDraft:
-		if err := m.TransitionRun(ctx, runID, dtorep.RunStateRunning); err != nil {
+		if err := u.machine.TransitionRun(ctx, runID, dtorep.RunStateRunning); err != nil {
 			return nil, err
 		}
 	default:
@@ -198,7 +249,7 @@ func (m *Machine) ResumeRun(ctx context.Context, runID string) (*dtorep.Run, err
 			runID, run.State, cstmerrors.ErrInvalidTransition)
 	}
 
-	return m.runs.GetRunByID(ctx, runID)
+	return u.runs.GetRunByID(ctx, runID)
 }
 
 // GateAction — действие резолва из API.
@@ -224,51 +275,57 @@ func mapGateAction(action GateAction) (dtorep.GateState, error) {
 }
 
 // ResolveGateAPI — резолв гейта с API-семантикой идемпотентности:
-// гейт уже резолвнут ТЕМ ЖЕ резолюшном → (alreadyResolved=true, nil);
-// другим → ErrGateAlreadyResolved (409).
-func (m *Machine) ResolveGateAPI(ctx context.Context, gateID string, action GateAction, text *string) (alreadyResolved bool, err error) {
+// гейт уже резолвнут ТЕМ ЖЕ резолюшном → (gate, alreadyResolved=true, nil);
+// другим → ErrGateAlreadyResolved (409). Возвращает актуальное состояние
+// гейта (контроллеру не нужно перечитывать репозиторий).
+func (u *Service) ResolveGateAPI(ctx context.Context, gateID string, action GateAction, text *string) (gate *dtorep.Gate, alreadyResolved bool, err error) {
 	resolution, err := mapGateAction(action)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 
-	gate, err := m.gates.GetGateByID(ctx, gateID)
+	gate, err = u.gates.GetGateByID(ctx, gateID)
 	if err != nil {
-		return false, fmt.Errorf("failed to load gate: %w", err)
+		return nil, false, fmt.Errorf("failed to load gate: %w", err)
 	}
 
 	if gate.State != dtorep.GateStateOpen {
 		if gate.State == resolution {
-			return true, nil
+			return gate, true, nil
 		}
-		return false, fmt.Errorf("gate %s resolved as %s, requested %s: %w",
+		return nil, false, fmt.Errorf("gate %s resolved as %s, requested %s: %w",
 			gateID, gate.State, resolution, cstmerrors.ErrGateAlreadyResolved)
 	}
 
-	if err := m.ResolveGate(ctx, gateID, resolution, text); err != nil {
-		return false, err
+	if err := u.machine.ResolveGate(ctx, gateID, resolution, text); err != nil {
+		return nil, false, err
 	}
 
 	// Диалоговый резолв (D-20/22): answer/comment с текстом по гейту этапа
 	// → ре-вход этапа с сообщением (resume сессии с ответом).
 	if (action == GateActionAnswer || action == GateActionComment) &&
 		text != nil && *text != "" && gate.StageID != nil {
-		if _, err := m.ReenterStage(ctx, *gate.StageID, *text); err != nil {
-			return false, err
+		if _, err := u.machine.ReenterStage(ctx, *gate.StageID, *text); err != nil {
+			return nil, false, err
 		}
 	}
-	return false, nil
+
+	gate, err = u.gates.GetGateByID(ctx, gateID)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to reload gate: %w", err)
+	}
+	return gate, false, nil
 }
 
 // InterruptStageSteer — Interrupt & Steer (D-22): running-стадия →
 // interrupted с stop_requested_by=user + steer-заметка; supervisor (T-09)
 // добьёт процесс и резюмит сессию с сообщением (T-11).
-func (m *Machine) InterruptStageSteer(ctx context.Context, stageID int64, message string) (*dtorep.Stage, error) {
+func (u *Service) InterruptStageSteer(ctx context.Context, stageID int64, message string) (*dtorep.Stage, error) {
 	if message == "" {
 		return nil, fmt.Errorf("steer message is empty: %w", cstmerrors.ErrValidation)
 	}
 
-	err := m.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+	err := u.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		stagesTx := stagesrep.NewTx(tx)
 		notesTx := notesrep.NewTx(tx)
 
@@ -291,8 +348,8 @@ func (m *Machine) InterruptStageSteer(ctx context.Context, stageID int64, messag
 		if !ok {
 			return fmt.Errorf("stage %d: %w", stageID, cstmerrors.ErrConcurrentModification)
 		}
-		if err := appendStateEvent(ctx, tx, m.appender, stage.RunID, &stageID,
-			EventKindStageStateChanged,
+		if err := runsmachine.AppendStateEvent(ctx, tx, u.appender, stage.RunID, &stageID,
+			runsmachine.EventKindStageStateChanged,
 			string(dtorep.StageStateRunning), string(dtorep.StageStateInterrupted)); err != nil {
 			return err
 		}
@@ -309,12 +366,12 @@ func (m *Machine) InterruptStageSteer(ctx context.Context, stageID int64, messag
 	if err != nil {
 		return nil, err
 	}
-	return m.stages.GetStageByID(ctx, stageID)
+	return u.stages.GetStageByID(ctx, stageID)
 }
 
 // CreateNote — queue note к ближайшему событию рана (D-22).
 // Идемпотентно по ключу: повтор → существующая заметка.
-func (m *Machine) CreateNote(ctx context.Context, runID, text, idempotencyKey string) (*dtorep.Note, error) {
+func (u *Service) CreateNote(ctx context.Context, runID, text, idempotencyKey string) (*dtorep.Note, error) {
 	if text == "" {
 		return nil, fmt.Errorf("note text is empty: %w", cstmerrors.ErrValidation)
 	}
@@ -322,24 +379,24 @@ func (m *Machine) CreateNote(ctx context.Context, runID, text, idempotencyKey st
 		idempotencyKey = uuid.New()
 	}
 
-	if _, err := m.runs.GetRunByID(ctx, runID); err != nil {
+	if _, err := u.runs.GetRunByID(ctx, runID); err != nil {
 		return nil, fmt.Errorf("failed to load run: %w", err)
 	}
 
-	noteID, err := m.notes.CreateNote(ctx, dtorep.CreateNoteRequest{
+	noteID, err := u.notes.CreateNote(ctx, dtorep.CreateNoteRequest{
 		RunID:          runID,
 		Kind:           dtorep.NoteKindNote,
 		Text:           text,
 		IdempotencyKey: idempotencyKey,
 	})
 	if errors.Is(err, cstmerrors.ErrDuplicate) {
-		return m.notes.GetNoteByIdempotencyKey(ctx, idempotencyKey)
+		return u.notes.GetNoteByIdempotencyKey(ctx, idempotencyKey)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	notes, err := m.notes.ListNotesByRun(ctx, runID)
+	notes, err := u.notes.ListNotesByRun(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -366,77 +423,4 @@ func slugify(taskText string) string {
 		s = "run"
 	}
 	return s
-}
-
-// ReenterStage — диалоговый ре-вход этапа (D-20/22/23): новая попытка
-// (iteration+1) БЕЗ увеличения resume_count — это не auto-resume, а
-// продолжение диалога (ответ на вопрос, комментарий, steer). Допустимые
-// исходные состояния: succeeded (вопросы-ответы), interrupted (steer),
-// failed (ручной ре-вход). message != "" → steer-заметка (уйдёт в промпт
-// новой попытки через consumption в supervisor).
-func (m *Machine) ReenterStage(ctx context.Context, stageID int64, message string) (*dtorep.Stage, error) {
-	var created *dtorep.Stage
-	err := m.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
-		stagesTx := stagesrep.NewTx(tx)
-
-		prev, err := stagesTx.GetStageByID(ctx, stageID)
-		if err != nil {
-			return fmt.Errorf("failed to load stage: %w", err)
-		}
-		switch prev.State {
-		case dtorep.StageStateSucceeded, dtorep.StageStateInterrupted, dtorep.StageStateFailed:
-		default:
-			return fmt.Errorf("stage %d in state %s: %w",
-				stageID, prev.State, cstmerrors.ErrInvalidTransition)
-		}
-		// ре-вход только от последней попытки цепочки
-		latest, err := stagesTx.GetLatestStage(ctx, prev.RunID, prev.StageKey)
-		if err != nil {
-			return fmt.Errorf("failed to load latest stage: %w", err)
-		}
-		if latest.ID != prev.ID {
-			return fmt.Errorf("stage %d: %w (re-enter of non-latest attempt, latest is %d)",
-				stageID, cstmerrors.ErrInvalidTransition, latest.ID)
-		}
-
-		id, err := stagesTx.CreateStage(ctx, dtorep.CreateStageRequest{
-			RunID:       prev.RunID,
-			StageKey:    prev.StageKey,
-			Iteration:   prev.Iteration + 1,
-			Harness:     prev.Harness,
-			ResumeCount: prev.ResumeCount, // НЕ инкрементируем: это диалог
-		})
-		if err != nil {
-			return err
-		}
-
-		if message != "" {
-			notesTx := notesrep.NewTx(tx)
-			if _, err := notesTx.CreateNote(ctx, dtorep.CreateNoteRequest{
-				RunID:          prev.RunID,
-				StageID:        &id,
-				Kind:           dtorep.NoteKindSteer,
-				Text:           message,
-				IdempotencyKey: uuid.New(),
-			}); err != nil {
-				return err
-			}
-		}
-
-		created, err = stagesTx.GetStageByID(ctx, id)
-		if err != nil {
-			return fmt.Errorf("failed to load created stage: %w", err)
-		}
-
-		if err := appendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
-			EventKindStageStateChanged, string(prev.State), string(dtorep.StageStatePending)); err != nil {
-			return err
-		}
-		return appendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
-			"stage.resumed", string(prev.State), string(dtorep.StageStatePending))
-	})
-	if err != nil {
-		return nil, err
-	}
-	return created, nil
 }

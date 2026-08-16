@@ -15,6 +15,8 @@ import (
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/events"
 	"github.com/fableFM/glamor/internal/harness"
+	"github.com/fableFM/glamor/internal/repository"
+	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
 	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
@@ -22,8 +24,9 @@ import (
 	runsrep "github.com/fableFM/glamor/internal/repository/runs"
 	stagesrep "github.com/fableFM/glamor/internal/repository/stages"
 	"github.com/fableFM/glamor/internal/repository/testdb"
+	"github.com/fableFM/glamor/internal/service/runsapi"
+	"github.com/fableFM/glamor/internal/service/runsmachine"
 	"github.com/fableFM/glamor/internal/service/supervisor"
-	usecase "github.com/fableFM/glamor/internal/usecase/runs"
 	"github.com/fableFM/glamor/pkg/uuid"
 )
 
@@ -84,7 +87,8 @@ func (f fakeAdapter) ExtractSessionID(evs []harness.Event, _ string) (string, er
 
 type fixture struct {
 	sup     *supervisor.Supervisor
-	machine *usecase.Machine
+	machine *runsmachine.Machine
+	runsSvc *runsapi.Service
 	journal *events.Journal
 	runID   string
 	workDir string
@@ -117,11 +121,18 @@ func newFixture(t *testing.T, script, specJSON string, mutateCfg func(*superviso
 	require.NoError(t, err)
 
 	hub := events.NewHub()
-	journal := events.NewJournal(db, hub)
-	machine := usecase.NewMachine(db, journal)
-	machine.SetTxExecutor(journal)
+	journal := events.NewJournal(eventsrep.NewRepository(db), repository.NewTxManager(db), hub)
+	machine := runsmachine.NewMachine(
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		gatesrep.NewRepository(db), pipelinesrep.NewRepository(db),
+		projectsrep.NewRepository(db), notesrep.NewRepository(db),
+		journal, journal)
+	runsSvc := runsapi.New(machine, journal, journal,
+		runsrep.NewRepository(db), stagesrep.NewRepository(db),
+		notesrep.NewRepository(db), projectsrep.NewRepository(db),
+		pipelinesrep.NewRepository(db), gatesrep.NewRepository(db))
 
-	run, already, err := machine.CreateRun(ctx, usecase.CreateRunParams{
+	run, already, err := runsSvc.CreateRun(ctx, runsapi.CreateRunParams{
 		ProjectID:         projectID,
 		PipelineVersionID: pipelineID,
 		TaskText:          "test task",
@@ -163,7 +174,7 @@ func newFixture(t *testing.T, script, specJSON string, mutateCfg func(*superviso
 	})
 
 	return &fixture{
-		sup: sup, machine: machine, journal: journal,
+		sup: sup, machine: machine, runsSvc: runsSvc, journal: journal,
 		runID: run.ID, workDir: workDir, runsDir: runsDir,
 		stages: stagesrep.NewRepository(db),
 		runs:   runsrep.NewRepository(db),
@@ -291,7 +302,7 @@ func TestUserStop(t *testing.T) {
 		return err == nil && st.State == dtorep.StageStateRunning
 	}, 10*time.Second, 50*time.Millisecond)
 
-	_, err := f.machine.StopRun(ctx, f.runID)
+	_, err := f.runsSvc.StopRun(ctx, f.runID)
 	require.NoError(t, err)
 
 	// процесс добит reconcile'ом, стадия interrupted с stop_requested_by=user
