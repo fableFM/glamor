@@ -9,6 +9,7 @@ interface ProjectsState {
   setLoading: () => void
   setAll: (projects: Project[]) => void
   setError: (message: string) => void
+  remove: (id: number) => void
   upsert: (project: Project) => void
 }
 
@@ -19,6 +20,7 @@ export const useProjectsStore = create<ProjectsState>((set) => ({
   setLoading: () => set({ loading: true, error: null }),
   setAll: (projects) => set({ items: projects, loading: false, error: null }),
   setError: (message) => set({ error: message, loading: false }),
+  remove: (id) => set((state) => ({ items: state.items.filter((p) => p.id !== id) })),
   upsert: (project) =>
     set((state) => {
       const index = state.items.findIndex((p) => p.id === project.id)

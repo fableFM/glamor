@@ -136,3 +136,26 @@ T-13 — их результат проверен мной повторно) · 
   с промптами и verdict-протоколом), T-18 (Tauri), e2e-теги harness'ов
   против реальных CLI (T-07/08 acceptance, не в CI).
 - M2+: TG-адаптер, редактор пайплайнов, vendor-память, метрики.
+
+---
+
+## Дополнение (2026-08-17): слойная реорганизация (параллельный рефактор)
+
+После сдачи T-05..T-13 независимый агент провёл рефактор по project-скиллу
+`.agents/skills/glamor-architecture` (закреплённому операционной формой
+D-80, уточнение 2026-08-16 в overview): **слой usecase упразднён**;
+контроллер не импортирует repository; self-DI запрещён.
+
+Текущая карта backend:
+- `internal/service/runsmachine` — стейт-машина (ex `usecase/runs`);
+- `internal/service/runsapi` — API-сценарии ранов (CreateRun/StopRun/…);
+- `internal/service/catalog` — read-агрегации для контроллера;
+- `internal/service/supervisor`, `internal/service/pipeline` — как было;
+- контроллер получает сервисы через интерфейсы, объявленные у потребителя
+  (Deps.Machine — интерфейс, не конкретный тип);
+- `events.Journal` собирается из eventsRepo+TxManager+Hub (без self-DI);
+- все репозитории конструируются один раз в main и раздаются готовыми.
+
+Проверено после рефактора: `make build/test/lint` зелёные, все тесты с
+-race проходят (включая supervisor/pipeline e2e). Весь новый код
+(T-17/T-21/T-19/T-20) пишется уже в этой структуре.

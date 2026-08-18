@@ -1,6 +1,6 @@
 # T-25 Адаптеры claude-code и codex
 
-Статус: todo · M3 · зависимости: T-06, research/harness-capability-matrix.md
+Статус: done (2026-08-17) · M3 · зависимости: T-06, research/harness-capability-matrix.md
 
 ## Цель
 
@@ -53,3 +53,16 @@
   (model/sandbox/json) передавать заново на каждый resume** (доки).
   Нет text-delta (agent_message целиком) → живой стрим ограничен
   reasoning/tool событиями. Sandbox-профиль для кодера: `workspace-write`.
+
+## Итог (2026-08-17, субагент; проверено: 5 harness-пакетов зелёные с -race, lint 0)
+
+- claude: `-p --output-format stream-json --verbose --include-partial-messages
+  --bare --permission-mode bypassPermissions` (+model/effort/-r/--json-schema);
+  api_retry → error.retry (признак жизни для watchdog); result с
+  usage+total_cost_usd; длинный промпт — stdin.
+- codex (ТОЛЬКО доки, UNVERIFIED): `codex exec <prompt> --json --sandbox
+  workspace-write`; resume `codex exec resume <id>` со всеми флагами заново;
+  effort `-c model_reasoning_effort` (UNVERIFIED → EffortLevels=nil);
+  --output-schema — путь к файлу. e2e отложен до локальной установки.
+- Зарегистрированы в main; capability matrix дополнена блоками «Реализация».
+- Золотые файлы синтезированы по матрице (claude 2.1.81, CLI не запускался).

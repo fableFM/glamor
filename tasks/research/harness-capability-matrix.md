@@ -216,6 +216,35 @@ dontAsk|plan|auto`, `--dangerously-skip-permissions`, гранулярные
 `format` keyword — аннотация). Несовместимостей с resume в доках не описано —
 UNVERIFIED, надо ли передавать схему на каждый resume (у qwen — надо).
 
+### Реализация (2026-08-17)
+
+Адаптер `backend/internal/harness/claude` (T-25). Факты уточнены при
+написании адаптера, CLI НЕ запускался (юнит-тесты на синтезированных
+golden NDJSON):
+
+- Команда: `claude -p <prompt> --output-format stream-json --verbose
+  --include-partial-messages --bare --permission-mode bypassPermissions`
+  (+`--model`, `--effort`, `-r <id>`, `--json-schema`). `--verbose`
+  всегда в паре со stream-json (риск 5); `--include-partial-messages`
+  включён — даёт `stream_event`/`content_block_delta` → живой стрим
+  `assistant.text_delta`/`thinking_delta`.
+- Длинный промпт (>100 КБ): короткий `-p`-stub + полный промпт в stdin
+  (stdin до 10 МБ, prompt+stdin = инструкция+контекст).
+- `system/api_retry` → нормализованное `error.retry` с Retriable=true —
+  «признак жизни» для stall-watchdog'а supervisor'а (T-09); верхний лимит
+  retry-лупы — конфиг supervisor'а, не адаптера.
+- `--json-schema` передаём заново на каждый resume (UNVERIFIED у claude,
+  обязательно у qwen; повторная передача безвредна).
+- `structured_output` парсим из stream-json `result` best-effort: в доках
+  поле описано для `--output-format json`, наличие в stream-json
+  result — UNVERIFIED.
+- `result.usage` — Anthropic-поля (`input_tokens/output_tokens/
+  cache_read_input_tokens/cache_creation_input_tokens`) +
+  `total_cost_usd` верхнего уровня.
+- `--permission-mode` — параметр конструктора адаптера (дефолт
+  bypassPermissions: этапы авто-одобрены); ACP-нативной поддержки нет
+  (Capabilities.ACP=false, адаптер внешний).
+
 ## 4. codex (OpenAI Codex CLI) — ТОЛЬКО ДОКИ (не установлен)
 
 Источники: https://developers.openai.com/codex/noninteractive ;
@@ -276,6 +305,37 @@ third-party источникам, точный enum для текущей вер
 по правилам OpenAI Structured Outputs) + `-o/--output-last-message <file>` —
 финальный JSON и в stdout, и в файл.
 
+### Реализация (2026-08-17)
+
+Адаптер `backend/internal/harness/codex` (T-25). CLI локально НЕ
+установлен — адаптер написан ТОЛЬКО по докам, CLI не запускался
+(юнит-тесты на синтезированных golden JSONL из примеров exec.md); e2e
+отложен до установки. Всё ниже — UNVERIFIED до живой проверки:
+
+- Команда: `codex exec "<prompt>" --json --sandbox workspace-write
+  --skip-git-repo-check` (+`-m <model>`); resume: `codex exec resume <id>
+  "<новое>"` — ВСЕ флаги (model/sandbox/json/schema) передаются заново
+  (доки: персистится только контекст диалога).
+- Длинный промпт (>100 КБ): `codex exec -` + stdin; форма resume+stdin
+  (`codex exec resume <id> -`) — UNVERIFIED, используем тот же `-`.
+- effort: `-c model_reasoning_effort=<effort>` пробрасываем, но enum
+  уровней UNVERIFIED → Capabilities.EffortLevels=nil (ручка disabled
+  в UI, D-43) до подтверждения на установленном CLI.
+- `--output-schema` принимает ПУТЬ к файлу схемы (не inline JSON, в
+  отличие от claude/qwen) → адаптер пишет схему во временный файл;
+  `-o` добавлен по докам (финальный JSON при этом остаётся и в stdout).
+- Маппинг событий: `thread.started.thread_id` → session.init;
+  `item.started command_execution` → tool_call.start; `item.completed`:
+  command_execution → tool_result (exit_code, aggregated_output с
+  усечением), agent_message → assistant.text ЦЕЛИКОМ (deltas нет),
+  reasoning → assistant.thinking; `turn.completed.usage` → usage;
+  `turn.failed`/`error` → error с retriable-классификацией.
+  `reasoning_output_tokens` отдельно НЕ суммируем в output (по семантике
+  OpenAI обычно уже входит в output_tokens — UNVERIFIED).
+- Терминального result-события у codex НЕТ: финальный ответ = последний
+  agent_message, usage = turn.completed (матрица, «Рекомендации»);
+  supervisor опирается на exit code.
+
 ## 5. opencode (1.2.27)
 
 Источники: `opencode --help`, `opencode run --help`, `opencode session
@@ -329,6 +389,49 @@ issue от сторонних версий; считать ОТСУТСТВУЮ�
 **Structured output.** Отдельного флага нет — UNVERIFIED. Прагматично:
 промпт-контракт + валидация, либо HTTP API `opencode serve` (возможно,
 есть structured options — не проверено).
+
+### Реализация (2026-08-17)
+
+Адаптер `backend/internal/harness/opencode` (T-26). Что уточнено при
+написании:
+
+- Команда: `opencode run [-s id] [-m provider/model] [--variant effort]
+  "<prompt>" --format json --auto`. `--dangerously-skip-permissions` в
+  1.2.27 отсутствует — подтверждено, не используем.
+- Длинный промпт (>100KB): stdin в `run` UNVERIFIED → временный файл +
+  короткая инструкция «прочитай файл X» (паттерн kimi-адаптера).
+- `text` мапится в `assistant.text_delta`, а не `assistant.text`:
+  гранулярность частичных text-событий UNVERIFIED, выбран безопасный
+  вариант (supervisor склеивает дельты). Если e2e покажет, что text —
+  всегда полный блок, сменить маппинг на `assistant.text`.
+- `tool_use` (только completed/error, стрима «tool started» нет) → пара
+  `tool_call.start` + `tool_result` с одинаковыми TS/CallID (start=end) —
+  зафиксированное отступление от семантики tool_call.*. При
+  `state.status=="error"` вывод берётся из `state.error`, ToolIsErr=true.
+- `step_finish` → только `usage` (tokens: input, output+reasoning
+  [reasoning складывается в output — отдельного поля в нормализованном
+  Usage нет], cache.read/write; cost → CostUSD). Терминальный `result`
+  адаптер НЕ синтезирует: ParseStream построчный/stateless, статус
+  завершения — из exit code процесса (supervisor). step-finish без
+  tokens/cost → raw (не выдумываем usage).
+- TS событий — из `timestamp` конверта (epoch ms); у kimi/qwen его нет и
+  берётся время парсинга, здесь CLI время шлёт.
+- `sessionID` (`ses_…`) есть в каждом событии конверта — ExtractSessionID
+  берёт первое непустое; модель в событиях отсутствует (#40544) —
+  Event.Model не заполняется.
+- error-конверт: `{type:"error", error:{name, data:{message, …}}}`;
+  retriable — по подстрокам сообщения (как у kimi/qwen), поле
+  `data.isRetryable` осознанно не используем (единообразие эвристики).
+- Транспорт `opencode serve` (headless HTTP API) НЕ реализован: для M1
+  достаточно CLI-стрима; serve — кандидат на будущее (экономия MCP
+  cold-boot через `--attach`, возможный structured output). Выбор
+  транспорта инкапсулирован в адаптере.
+- EffortLevels=nil: значения `--variant` provider-specific, фиксированного
+  enum нет → ручка disabled в UI (D-43).
+- Golden-файлы `testdata/*.ndjson` синтезированы по этой матрице +
+  takopi.dev cheatsheet (1.2.27); живой CLI в юнит-тестах не запускается.
+  E2E-каркас (`opencode_e2e_test.go`, build tag e2e) — точка проверки
+  UNVERIFIED: resume `-s` end-to-end (риск 7) и проявление #26855.
 
 ## 6. pi (@earendil-works/pi-coding-agent) — ТОЛЬКО ДОКИ (не установлен)
 

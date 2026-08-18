@@ -19,4 +19,5 @@ type run struct {
 	idempotencyKey    string
 	createdAt         time.Time
 	finishedAt        sql.NullTime
+	tgRootMessageID   sql.NullInt64
 }

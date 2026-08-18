@@ -27,4 +27,21 @@ var (
 
 	// ErrValidation — невалидный запрос (бизнес-валидация, не схема).
 	ErrValidation = errors.New("validation failed")
+
+	// ErrTooLarge — содержимое больше допустимого cap'а (413; артефакты, F-02).
+	ErrTooLarge = errors.New("content too large")
 )
+
+// RunLockedError — lock-конфликт (D-33) с контекстом: какая ветка занята
+// и каким активным раном. Разворачивается в ErrRunLocked (errors.Is),
+// контроллер маппит поля в details ответа 409.
+type RunLockedError struct {
+	Branch string
+	RunID  string
+}
+
+func (e *RunLockedError) Error() string {
+	return "branch " + e.Branch + " is locked by run " + e.RunID + ": " + ErrRunLocked.Error()
+}
+
+func (e *RunLockedError) Unwrap() error { return ErrRunLocked }

@@ -60,3 +60,11 @@ is_error → error), ExtractSessionID (result→init fallback), retriable
 (429/529/сетевые). Золотые файлы по матрице (qwen 0.21.3).
 Проверка: юнит-тесты зелёные с -race, lint 0 issues. Ядро (supervisor)
 работает с обоими адаптерами без ветвлений по имени.
+
+### Дополнение 2026-08-17 (fix-task-2, П.9): каркас e2e
+
+Написан `backend/internal/harness/qwen/qwen_e2e_test.go` (build tag
+`e2e`): skip при отсутствии бинаря в PATH / credentials / result-события;
+сценарий — простой промпт → result-событие в стриме → ExtractSessionID →
+resume (`-r`, все флаги заново). Прогон на машине с qwen в PATH прошёл
+живьём. Полноценный e2e пайплайна (этап + артефакт) — T-17.

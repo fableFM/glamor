@@ -1,6 +1,6 @@
 # T-24 Метрики: токены и время per stage
 
-Статус: todo · M3 · зависимости: T-06 (usage-события), T-04
+Статус: done (2026-08-17) · M3 · зависимости: T-06 (usage-события), T-04
 
 ## Цель
 
@@ -26,3 +26,21 @@
 
 - Цифры на экране рана совпадают с суммой usage-событий журнала (тест).
 - Ран из 4+ этапов с петлёй: метрики корректно группируются по итерациям.
+
+## Итог (2026-08-17)
+
+Сделано (backend):
+- Сбор: usage-события накапливаются в stageProc (atomic счётчики) и
+  пишутся в run_stages.tokens_in/out при классификации — сумма
+  usage-событий журнала == метрики этапа (тест TestStageSuccess с
+  двумя usage-событиями: 100+7/50+3). Отсутствие usage → 0/«—», не
+  выдумываем.
+- API: GET /runs/{id}/metrics (per stage + итоги + gate_wait_seconds —
+  производное событий gate.opened/resolved, не хранится), GET
+  /runs/{id}/metrics.csv, GET /projects/{id}/metrics?period=24h|7d|30d|all
+  (Since-фильтр через sqlbuilder в ListRunsRequest).
+- UI (в брифе UI-агента этого батча): таб «Метрики» из metrics API,
+  итоги в header рана, страница статистики проекта, экспорт CSV.
+
+Проверка: catalog-тесты (метрики == сумме usage, gate_wait > 0 после
+резолва, project metrics за период/all) — зелёные с -race.

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -28,6 +29,7 @@ const (
 	GateOpened        EventKind = "gate.opened"
 	GateResolved      EventKind = "gate.resolved"
 	RunBranchMismatch EventKind = "run.branch_mismatch"
+	RunCreated        EventKind = "run.created"
 	RunStateChanged   EventKind = "run.state_changed"
 	StageInterrupted  EventKind = "stage.interrupted"
 	StageQueued       EventKind = "stage.queued"
@@ -51,6 +53,8 @@ func (e EventKind) Valid() bool {
 	case GateResolved:
 		return true
 	case RunBranchMismatch:
+		return true
+	case RunCreated:
 		return true
 	case RunStateChanged:
 		return true
@@ -87,6 +91,7 @@ func (e EventKind) Valid() bool {
 const (
 	Escalation   GateKind = "escalation"
 	FinalReview  GateKind = "final_review"
+	LessonReview GateKind = "lesson_review"
 	PlanApproval GateKind = "plan_approval"
 	Question     GateKind = "question"
 )
@@ -97,6 +102,8 @@ func (e GateKind) Valid() bool {
 	case Escalation:
 		return true
 	case FinalReview:
+		return true
+	case LessonReview:
 		return true
 	case PlanApproval:
 		return true
@@ -109,25 +116,148 @@ func (e GateKind) Valid() bool {
 
 // Defines values for GateState.
 const (
-	Answered GateState = "answered"
-	Approved GateState = "approved"
-	Expired  GateState = "expired"
-	Open     GateState = "open"
-	Rejected GateState = "rejected"
+	GateStateAnswered GateState = "answered"
+	GateStateApproved GateState = "approved"
+	GateStateExpired  GateState = "expired"
+	GateStateOpen     GateState = "open"
+	GateStateRejected GateState = "rejected"
 )
 
 // Valid indicates whether the value is a known member of the GateState enum.
 func (e GateState) Valid() bool {
 	switch e {
-	case Answered:
+	case GateStateAnswered:
 		return true
-	case Approved:
+	case GateStateApproved:
 		return true
-	case Expired:
+	case GateStateExpired:
 		return true
-	case Open:
+	case GateStateOpen:
 		return true
-	case Rejected:
+	case GateStateRejected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ImportPipelineRequestOnConflict.
+const (
+	Fail    ImportPipelineRequestOnConflict = "fail"
+	New     ImportPipelineRequestOnConflict = "new"
+	Version ImportPipelineRequestOnConflict = "version"
+)
+
+// Valid indicates whether the value is a known member of the ImportPipelineRequestOnConflict enum.
+func (e ImportPipelineRequestOnConflict) Valid() bool {
+	switch e {
+	case Fail:
+		return true
+	case New:
+		return true
+	case Version:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LessonScope.
+const (
+	LessonScopeGlobal  LessonScope = "global"
+	LessonScopeProject LessonScope = "project"
+)
+
+// Valid indicates whether the value is a known member of the LessonScope enum.
+func (e LessonScope) Valid() bool {
+	switch e {
+	case LessonScopeGlobal:
+		return true
+	case LessonScopeProject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LessonStatus.
+const (
+	LessonStatusConfirmed  LessonStatus = "confirmed"
+	LessonStatusProposed   LessonStatus = "proposed"
+	LessonStatusRejected   LessonStatus = "rejected"
+	LessonStatusSuperseded LessonStatus = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the LessonStatus enum.
+func (e LessonStatus) Valid() bool {
+	switch e {
+	case LessonStatusConfirmed:
+		return true
+	case LessonStatusProposed:
+		return true
+	case LessonStatusRejected:
+		return true
+	case LessonStatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LessonDetailScope.
+const (
+	LessonDetailScopeGlobal  LessonDetailScope = "global"
+	LessonDetailScopeProject LessonDetailScope = "project"
+)
+
+// Valid indicates whether the value is a known member of the LessonDetailScope enum.
+func (e LessonDetailScope) Valid() bool {
+	switch e {
+	case LessonDetailScopeGlobal:
+		return true
+	case LessonDetailScopeProject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LessonDetailStatus.
+const (
+	LessonDetailStatusConfirmed  LessonDetailStatus = "confirmed"
+	LessonDetailStatusProposed   LessonDetailStatus = "proposed"
+	LessonDetailStatusRejected   LessonDetailStatus = "rejected"
+	LessonDetailStatusSuperseded LessonDetailStatus = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the LessonDetailStatus enum.
+func (e LessonDetailStatus) Valid() bool {
+	switch e {
+	case LessonDetailStatusConfirmed:
+		return true
+	case LessonDetailStatusProposed:
+		return true
+	case LessonDetailStatusRejected:
+		return true
+	case LessonDetailStatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MemoryWriteFileRequestScope.
+const (
+	MemoryWriteFileRequestScopeGlobal  MemoryWriteFileRequestScope = "global"
+	MemoryWriteFileRequestScopeProject MemoryWriteFileRequestScope = "project"
+)
+
+// Valid indicates whether the value is a known member of the MemoryWriteFileRequestScope enum.
+func (e MemoryWriteFileRequestScope) Valid() bool {
+	switch e {
+	case MemoryWriteFileRequestScopeGlobal:
+		return true
+	case MemoryWriteFileRequestScopeProject:
 		return true
 	default:
 		return false
@@ -236,6 +366,114 @@ func (e StageState) Valid() bool {
 	}
 }
 
+// Defines values for ListLessonsParamsStatus.
+const (
+	ListLessonsParamsStatusConfirmed  ListLessonsParamsStatus = "confirmed"
+	ListLessonsParamsStatusProposed   ListLessonsParamsStatus = "proposed"
+	ListLessonsParamsStatusRejected   ListLessonsParamsStatus = "rejected"
+	ListLessonsParamsStatusSuperseded ListLessonsParamsStatus = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the ListLessonsParamsStatus enum.
+func (e ListLessonsParamsStatus) Valid() bool {
+	switch e {
+	case ListLessonsParamsStatusConfirmed:
+		return true
+	case ListLessonsParamsStatusProposed:
+		return true
+	case ListLessonsParamsStatusRejected:
+		return true
+	case ListLessonsParamsStatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListLessonsParamsScope.
+const (
+	ListLessonsParamsScopeGlobal  ListLessonsParamsScope = "global"
+	ListLessonsParamsScopeProject ListLessonsParamsScope = "project"
+)
+
+// Valid indicates whether the value is a known member of the ListLessonsParamsScope enum.
+func (e ListLessonsParamsScope) Valid() bool {
+	switch e {
+	case ListLessonsParamsScopeGlobal:
+		return true
+	case ListLessonsParamsScopeProject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PatchLessonJSONBodyStatus.
+const (
+	PatchLessonJSONBodyStatusConfirmed  PatchLessonJSONBodyStatus = "confirmed"
+	PatchLessonJSONBodyStatusProposed   PatchLessonJSONBodyStatus = "proposed"
+	PatchLessonJSONBodyStatusRejected   PatchLessonJSONBodyStatus = "rejected"
+	PatchLessonJSONBodyStatusSuperseded PatchLessonJSONBodyStatus = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the PatchLessonJSONBodyStatus enum.
+func (e PatchLessonJSONBodyStatus) Valid() bool {
+	switch e {
+	case PatchLessonJSONBodyStatusConfirmed:
+		return true
+	case PatchLessonJSONBodyStatusProposed:
+		return true
+	case PatchLessonJSONBodyStatusRejected:
+		return true
+	case PatchLessonJSONBodyStatusSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MemoryReadFileParamsScope.
+const (
+	MemoryReadFileParamsScopeGlobal  MemoryReadFileParamsScope = "global"
+	MemoryReadFileParamsScopeProject MemoryReadFileParamsScope = "project"
+)
+
+// Valid indicates whether the value is a known member of the MemoryReadFileParamsScope enum.
+func (e MemoryReadFileParamsScope) Valid() bool {
+	switch e {
+	case MemoryReadFileParamsScopeGlobal:
+		return true
+	case MemoryReadFileParamsScopeProject:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetProjectMetricsParamsPeriod.
+const (
+	All  GetProjectMetricsParamsPeriod = "all"
+	N24h GetProjectMetricsParamsPeriod = "24h"
+	N30d GetProjectMetricsParamsPeriod = "30d"
+	N7d  GetProjectMetricsParamsPeriod = "7d"
+)
+
+// Valid indicates whether the value is a known member of the GetProjectMetricsParamsPeriod enum.
+func (e GetProjectMetricsParamsPeriod) Valid() bool {
+	switch e {
+	case All:
+		return true
+	case N24h:
+		return true
+	case N30d:
+		return true
+	case N7d:
+		return true
+	default:
+		return false
+	}
+}
+
 // Artifact defines model for Artifact.
 type Artifact struct {
 	CreatedAt time.Time `json:"created_at"`
@@ -249,6 +487,20 @@ type Artifact struct {
 // CreateNoteRequest defines model for CreateNoteRequest.
 type CreateNoteRequest struct {
 	Text string `json:"text"`
+}
+
+// CreatePipelineRequest defines model for CreatePipelineRequest.
+type CreatePipelineRequest struct {
+	Name string `json:"name"`
+
+	// ProjectId NULL = глобальный пайплайн
+	ProjectId *int64 `json:"project_id,omitempty"`
+	SpecJson  string `json:"spec_json"`
+}
+
+// CreatePipelineVersionRequest defines model for CreatePipelineVersionRequest.
+type CreatePipelineVersionRequest struct {
+	SpecJson string `json:"spec_json"`
 }
 
 // CreateProjectRequest defines model for CreateProjectRequest.
@@ -280,7 +532,10 @@ type CreateRunRequest struct {
 type Error struct {
 	// Code доменный код: not_found, invalid_transition, run_locked,
 	// gate_already_resolved, duplicate, draining, validation, internal
-	Code    string                  `json:"code"`
+	Code string `json:"code"`
+
+	// Details контекст ошибки: dirty_checkout → {files: string[]};
+	// run_locked → {branch: string, run_id: string} (F-02)
 	Details *map[string]interface{} `json:"details,omitempty"`
 	Message string                  `json:"message"`
 }
@@ -293,6 +548,7 @@ type Event struct {
 	Kind EventKind `json:"kind"`
 
 	// Payload Полиморфный payload события (детерминирован kind'ом события):
+	// - run.created → RunCreatedPayload
 	// - run.state_changed / stage.state_changed → StateChangedPayload
 	// - gate.opened / gate.resolved → GatePayload
 	// - stream.thinking / stream.text / stream.raw → StreamTextPayload
@@ -311,6 +567,7 @@ type Event struct {
 type EventKind string
 
 // EventPayload Полиморфный payload события (детерминирован kind'ом события):
+// - run.created → RunCreatedPayload
 // - run.state_changed / stage.state_changed → StateChangedPayload
 // - gate.opened / gate.resolved → GatePayload
 // - stream.thinking / stream.text / stream.raw → StreamTextPayload
@@ -318,6 +575,18 @@ type EventKind string
 // - stream.usage → StreamUsagePayload
 // - stream.error → StreamErrorPayload
 type EventPayload map[string]interface{}
+
+// FsBrowseResult defines model for FsBrowseResult.
+type FsBrowseResult struct {
+	Dirs []struct {
+		// IsGitRepo есть .git — подсказка «это проект»
+		IsGitRepo bool   `json:"is_git_repo"`
+		Name      string `json:"name"`
+		Path      string `json:"path"`
+	} `json:"dirs"`
+	Parent *string `json:"parent,omitempty"`
+	Path   string  `json:"path"`
+}
 
 // Gate defines model for Gate.
 type Gate struct {
@@ -339,11 +608,117 @@ type GateKind string
 // GateState defines model for GateState.
 type GateState string
 
+// ImportPipelineRequest defines model for ImportPipelineRequest.
+type ImportPipelineRequest struct {
+	// OnConflict new — всегда новый пайплайн; version — новая версия
+	// существующего по имени; fail — ошибка при совпадении имени
+	OnConflict *ImportPipelineRequestOnConflict `json:"on_conflict,omitempty"`
+
+	// Yaml пайплайн в YAML-формате T-21
+	Yaml string `json:"yaml"`
+}
+
+// ImportPipelineRequestOnConflict new — всегда новый пайплайн; version — новая версия
+// существующего по имени; fail — ошибка при совпадении имени
+type ImportPipelineRequestOnConflict string
+
 // InterruptStageRequest defines model for InterruptStageRequest.
 type InterruptStageRequest struct {
 	// Message steer-сообщение — сессия резюмится с ним (D-22)
 	Message string `json:"message"`
 }
+
+// Lesson defines model for Lesson.
+type Lesson struct {
+	AppliedCount *int64       `json:"applied_count,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
+	Id           string       `json:"id"`
+	Path         string       `json:"path"`
+	ProjectId    *int64       `json:"project_id,omitempty"`
+	RelapseCount *int64       `json:"relapse_count,omitempty"`
+	RunId        *string      `json:"run_id,omitempty"`
+	Scope        LessonScope  `json:"scope"`
+	StageKey     *string      `json:"stage_key,omitempty"`
+	Status       LessonStatus `json:"status"`
+	Title        string       `json:"title"`
+}
+
+// LessonScope defines model for Lesson.Scope.
+type LessonScope string
+
+// LessonStatus defines model for Lesson.Status.
+type LessonStatus string
+
+// LessonDetail defines model for LessonDetail.
+type LessonDetail struct {
+	AppliedCount *int64             `json:"applied_count,omitempty"`
+	Content      string             `json:"content"`
+	CreatedAt    time.Time          `json:"created_at"`
+	Id           string             `json:"id"`
+	Path         string             `json:"path"`
+	ProjectId    *int64             `json:"project_id,omitempty"`
+	RelapseCount *int64             `json:"relapse_count,omitempty"`
+	RunId        *string            `json:"run_id,omitempty"`
+	Scope        LessonDetailScope  `json:"scope"`
+	StageKey     *string            `json:"stage_key,omitempty"`
+	Status       LessonDetailStatus `json:"status"`
+	Title        string             `json:"title"`
+}
+
+// LessonDetailScope defines model for LessonDetail.Scope.
+type LessonDetailScope string
+
+// LessonDetailStatus defines model for LessonDetail.Status.
+type LessonDetailStatus string
+
+// MemoryFileContent defines model for MemoryFileContent.
+type MemoryFileContent struct {
+	Content string `json:"content"`
+	Scope   string `json:"scope"`
+	Vendor  string `json:"vendor"`
+}
+
+// MemoryFileEntry defines model for MemoryFileEntry.
+type MemoryFileEntry struct {
+	Path      string    `json:"path"`
+	Size      int64     `json:"size"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Vendor    string    `json:"vendor"`
+}
+
+// MemoryHistoryEntry defines model for MemoryHistoryEntry.
+type MemoryHistoryEntry struct {
+	Date    string `json:"date"`
+	Hash    string `json:"hash"`
+	Message string `json:"message"`
+}
+
+// MemoryPromoteRequest defines model for MemoryPromoteRequest.
+type MemoryPromoteRequest struct {
+	ProjectId int64  `json:"project_id"`
+	Vendor    string `json:"vendor"`
+}
+
+// MemoryTree defines model for MemoryTree.
+type MemoryTree struct {
+	Global   []MemoryFileEntry `json:"global"`
+	Projects []struct {
+		Files       []MemoryFileEntry `json:"files"`
+		ProjectId   int64             `json:"project_id"`
+		ProjectName string            `json:"project_name"`
+	} `json:"projects"`
+}
+
+// MemoryWriteFileRequest defines model for MemoryWriteFileRequest.
+type MemoryWriteFileRequest struct {
+	Content   string                      `json:"content"`
+	ProjectId *int64                      `json:"project_id,omitempty"`
+	Scope     MemoryWriteFileRequestScope `json:"scope"`
+	Vendor    string                      `json:"vendor"`
+}
+
+// MemoryWriteFileRequestScope defines model for MemoryWriteFileRequest.Scope.
+type MemoryWriteFileRequestScope string
 
 // Note defines model for Note.
 type Note struct {
@@ -359,10 +734,23 @@ type Note struct {
 // NoteKind defines model for Note.Kind.
 type NoteKind string
 
+// PairTelegramRequest defines model for PairTelegramRequest.
+type PairTelegramRequest struct {
+	// Code 6-значный код, выданный ботом на /start
+	Code string `json:"code"`
+}
+
+// PairTelegramResponse defines model for PairTelegramResponse.
+type PairTelegramResponse struct {
+	// ChatId привязанный чат (добавлен в whitelist)
+	ChatId int64 `json:"chat_id"`
+}
+
 // PatchProjectRequest defines model for PatchProjectRequest.
 type PatchProjectRequest struct {
-	DefaultBranch *string `json:"default_branch,omitempty"`
-	IdeCommand    *string `json:"ide_command,omitempty"`
+	DefaultBranch   *string `json:"default_branch,omitempty"`
+	IdeCommand      *string `json:"ide_command,omitempty"`
+	NotifyTgDefault *bool   `json:"notify_tg_default,omitempty"`
 }
 
 // Pipeline defines model for Pipeline.
@@ -399,7 +787,10 @@ type Project struct {
 	Id            int64     `json:"id"`
 	IdeCommand    string    `json:"ide_command"`
 	Name          string    `json:"name"`
-	Path          string    `json:"path"`
+
+	// NotifyTgDefault дефолт notify_tg для новых ранов проекта (T-16)
+	NotifyTgDefault *bool  `json:"notify_tg_default,omitempty"`
+	Path            string `json:"path"`
 }
 
 // ProjectDetail defines model for ProjectDetail.
@@ -411,9 +802,24 @@ type ProjectDetail struct {
 	IdeCommand    string    `json:"ide_command"`
 	Name          string    `json:"name"`
 
+	// NotifyTgDefault дефолт notify_tg для новых ранов проекта (T-16)
+	NotifyTgDefault *bool `json:"notify_tg_default,omitempty"`
+
 	// OpenGates открытые гейты по всем активным ранам проекта
 	OpenGates int    `json:"open_gates"`
 	Path      string `json:"path"`
+}
+
+// ProjectMetrics defines model for ProjectMetrics.
+type ProjectMetrics struct {
+	// ByState число ранов по состояниям
+	ByState          map[string]int `json:"by_state"`
+	Period           string         `json:"period"`
+	ProjectId        int64          `json:"project_id"`
+	RunsTotal        int            `json:"runs_total"`
+	TokensIn         int64          `json:"tokens_in"`
+	TokensOut        int64          `json:"tokens_out"`
+	TotalDurationSec *float32       `json:"total_duration_sec,omitempty"`
 }
 
 // ResolveGateRequest defines model for ResolveGateRequest.
@@ -465,8 +871,28 @@ type RunDetail struct {
 	TaskText          string     `json:"task_text"`
 }
 
+// RunMetrics defines model for RunMetrics.
+type RunMetrics struct {
+	// GateWaitSeconds суммарное ожидание гейтов (производное событий, не хранится)
+	GateWaitSeconds float32        `json:"gate_wait_seconds"`
+	RunId           string         `json:"run_id"`
+	Stages          []StageMetrics `json:"stages"`
+	Totals          struct {
+		DurationSec *float32 `json:"duration_sec,omitempty"`
+		StagesCount int      `json:"stages_count"`
+		TokensIn    int64    `json:"tokens_in"`
+		TokensOut   int64    `json:"tokens_out"`
+	} `json:"totals"`
+}
+
 // RunState defines model for RunState.
 type RunState string
+
+// Settings defines model for Settings.
+type Settings struct {
+	Supervisor SupervisorSettings `json:"supervisor"`
+	Telegram   TelegramSettings   `json:"telegram"`
+}
 
 // Stage defines model for Stage.
 type Stage struct {
@@ -488,8 +914,59 @@ type Stage struct {
 	TokensOut       int64      `json:"tokens_out"`
 }
 
+// StageMetrics defines model for StageMetrics.
+type StageMetrics struct {
+	// DurationSec finished_at - started_at; null если не завершена
+	DurationSec *float32   `json:"duration_sec,omitempty"`
+	ExitCode    *int64     `json:"exit_code,omitempty"`
+	Iteration   int64      `json:"iteration"`
+	ResumeCount int64      `json:"resume_count"`
+	StageId     int64      `json:"stage_id"`
+	StageKey    string     `json:"stage_key"`
+	State       StageState `json:"state"`
+
+	// TokensIn 0 = harness не сообщил usage (показывать «—»)
+	TokensIn  int64 `json:"tokens_in"`
+	TokensOut int64 `json:"tokens_out"`
+}
+
 // StageState defines model for StageState.
 type StageState string
+
+// SupervisorSettings defines model for SupervisorSettings.
+type SupervisorSettings struct {
+	MaxAutoResumes  int64 `json:"max_auto_resumes"`
+	MaxParallel     int   `json:"max_parallel"`
+	StageTimeoutMin int   `json:"stage_timeout_min"`
+	StallTimeoutSec int   `json:"stall_timeout_sec"`
+}
+
+// SupervisorSettingsPut defines model for SupervisorSettingsPut.
+type SupervisorSettingsPut struct {
+	MaxAutoResumes  *int64 `json:"max_auto_resumes,omitempty"`
+	MaxParallel     *int   `json:"max_parallel,omitempty"`
+	StageTimeoutMin *int   `json:"stage_timeout_min,omitempty"`
+	StallTimeoutSec *int   `json:"stall_timeout_sec,omitempty"`
+}
+
+// TelegramSettings defines model for TelegramSettings.
+type TelegramSettings struct {
+	// BotUsername из getMe при валидном токене
+	BotUsername *string `json:"bot_username,omitempty"`
+	Enabled     bool    `json:"enabled"`
+	HasToken    bool    `json:"has_token"`
+
+	// TokenMasked первые/последние символы, полный токен не отдаётся
+	TokenMasked *string `json:"token_masked,omitempty"`
+}
+
+// TelegramSettingsPut defines model for TelegramSettingsPut.
+type TelegramSettingsPut struct {
+	Enabled bool `json:"enabled"`
+
+	// Token пусто = оставить текущий; валидация через getMe
+	Token *string `json:"token,omitempty"`
+}
 
 // VersionInfo defines model for VersionInfo.
 type VersionInfo struct {
@@ -516,11 +993,61 @@ type RunId = string
 // StageId defines model for StageId.
 type StageId = int64
 
+// FsBrowseParams defines parameters for FsBrowse.
+type FsBrowseParams struct {
+	// Path абсолютный путь; пусто = домашний каталог
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+}
+
 // ResolveGateParams defines parameters for ResolveGate.
 type ResolveGateParams struct {
 	// IdempotencyKey ключ идемпотентности (D-12); не передан — сервер сгенерирует
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
+
+// ListLessonsParams defines parameters for ListLessons.
+type ListLessonsParams struct {
+	Status    *ListLessonsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+	Scope     *ListLessonsParamsScope  `form:"scope,omitempty" json:"scope,omitempty"`
+	ProjectId *int64                   `form:"project_id,omitempty" json:"project_id,omitempty"`
+}
+
+// ListLessonsParamsStatus defines parameters for ListLessons.
+type ListLessonsParamsStatus string
+
+// ListLessonsParamsScope defines parameters for ListLessons.
+type ListLessonsParamsScope string
+
+// PatchLessonJSONBody defines parameters for PatchLesson.
+type PatchLessonJSONBody struct {
+	Status PatchLessonJSONBodyStatus `json:"status"`
+}
+
+// PatchLessonJSONBodyStatus defines parameters for PatchLesson.
+type PatchLessonJSONBodyStatus string
+
+// MemoryReadFileParams defines parameters for MemoryReadFile.
+type MemoryReadFileParams struct {
+	Scope     MemoryReadFileParamsScope `form:"scope" json:"scope"`
+	Vendor    string                    `form:"vendor" json:"vendor"`
+	ProjectId *int64                    `form:"project_id,omitempty" json:"project_id,omitempty"`
+}
+
+// MemoryReadFileParamsScope defines parameters for MemoryReadFile.
+type MemoryReadFileParamsScope string
+
+// MemoryHistoryParams defines parameters for MemoryHistory.
+type MemoryHistoryParams struct {
+	Vendor string `form:"vendor" json:"vendor"`
+}
+
+// GetProjectMetricsParams defines parameters for GetProjectMetrics.
+type GetProjectMetricsParams struct {
+	Period *GetProjectMetricsParamsPeriod `form:"period,omitempty" json:"period,omitempty"`
+}
+
+// GetProjectMetricsParamsPeriod defines parameters for GetProjectMetrics.
+type GetProjectMetricsParamsPeriod string
 
 // ListRunsParams defines parameters for ListRuns.
 type ListRunsParams struct {
@@ -573,6 +1100,24 @@ type EventsWsParams struct {
 // ResolveGateJSONRequestBody defines body for ResolveGate for application/json ContentType.
 type ResolveGateJSONRequestBody = ResolveGateRequest
 
+// PatchLessonJSONRequestBody defines body for PatchLesson for application/json ContentType.
+type PatchLessonJSONRequestBody PatchLessonJSONBody
+
+// MemoryWriteFileJSONRequestBody defines body for MemoryWriteFile for application/json ContentType.
+type MemoryWriteFileJSONRequestBody = MemoryWriteFileRequest
+
+// MemoryPromoteJSONRequestBody defines body for MemoryPromote for application/json ContentType.
+type MemoryPromoteJSONRequestBody = MemoryPromoteRequest
+
+// CreatePipelineJSONRequestBody defines body for CreatePipeline for application/json ContentType.
+type CreatePipelineJSONRequestBody = CreatePipelineRequest
+
+// ImportPipelineJSONRequestBody defines body for ImportPipeline for application/json ContentType.
+type ImportPipelineJSONRequestBody = ImportPipelineRequest
+
+// CreatePipelineVersionJSONRequestBody defines body for CreatePipelineVersion for application/json ContentType.
+type CreatePipelineVersionJSONRequestBody = CreatePipelineVersionRequest
+
 // CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
 type CreateProjectJSONRequestBody = CreateProjectRequest
 
@@ -585,32 +1130,92 @@ type CreateRunJSONRequestBody = CreateRunRequest
 // CreateNoteJSONRequestBody defines body for CreateNote for application/json ContentType.
 type CreateNoteJSONRequestBody = CreateNoteRequest
 
+// PutSupervisorSettingsJSONRequestBody defines body for PutSupervisorSettings for application/json ContentType.
+type PutSupervisorSettingsJSONRequestBody = SupervisorSettingsPut
+
+// PutTelegramSettingsJSONRequestBody defines body for PutTelegramSettings for application/json ContentType.
+type PutTelegramSettingsJSONRequestBody = TelegramSettingsPut
+
 // InterruptStageJSONRequestBody defines body for InterruptStage for application/json ContentType.
 type InterruptStageJSONRequestBody = InterruptStageRequest
 
+// PairTelegramJSONRequestBody defines body for PairTelegram for application/json ContentType.
+type PairTelegramJSONRequestBody = PairTelegramRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// FsBrowse Листинг подкаталогов (выбор папки проекта в браузерном UI, T-16)
+	// (GET /fs/browse)
+	FsBrowse(w http.ResponseWriter, r *http.Request, params FsBrowseParams)
 	// ResolveGate Резолв гейта (идемпотентно; повтор → 200 + already_resolved)
 	// (POST /gates/{id}/resolve)
 	ResolveGate(w http.ResponseWriter, r *http.Request, id GateId, params ResolveGateParams)
 	// Healthz Liveness probe демона (без auth)
 	// (GET /healthz)
 	Healthz(w http.ResponseWriter, r *http.Request)
+	// ListLessons Список уроков (D-52, T-29)
+	// (GET /lessons)
+	ListLessons(w http.ResponseWriter, r *http.Request, params ListLessonsParams)
+	// GetLesson Урок с содержимым файла
+	// (GET /lessons/{id})
+	GetLesson(w http.ResponseWriter, r *http.Request, id string)
+	// PatchLesson Смена статуса урока (confirm/reject из UI)
+	// (PATCH /lessons/{id})
+	PatchLesson(w http.ResponseWriter, r *http.Request, id string)
+	// MemoryReadFile Содержимое файла памяти
+	// (GET /memory/file)
+	MemoryReadFile(w http.ResponseWriter, r *http.Request, params MemoryReadFileParams)
+	// MemoryWriteFile Ручная правка файла памяти (T-23)
+	// (PUT /memory/file)
+	MemoryWriteFile(w http.ResponseWriter, r *http.Request)
+	// MemoryHistory История изменений файла глобальной памяти (git log)
+	// (GET /memory/history)
+	MemoryHistory(w http.ResponseWriter, r *http.Request, params MemoryHistoryParams)
+	// MemoryPromote Промоушн записи локальной памяти в глобальную (T-23)
+	// (POST /memory/promote)
+	MemoryPromote(w http.ResponseWriter, r *http.Request)
+	// MemoryTree Дерево vendor-памяти (глобальная + по проектам), T-23
+	// (GET /memory/tree)
+	MemoryTree(w http.ResponseWriter, r *http.Request)
+	// GetPipelineVersion Конкретная версия пайплайна
+	// (GET /pipeline-versions/{vid})
+	GetPipelineVersion(w http.ResponseWriter, r *http.Request, vid int64)
+	// ExportPipelineVersion Экспорт версии в YAML (T-21)
+	// (GET /pipeline-versions/{vid}/export)
+	ExportPipelineVersion(w http.ResponseWriter, r *http.Request, vid int64)
+	// CreatePipeline Создать пайплайн (первая версия)
+	// (POST /pipelines)
+	CreatePipeline(w http.ResponseWriter, r *http.Request)
+	// ImportPipeline Импорт пайплайна из YAML (T-21)
+	// (POST /pipelines/import)
+	ImportPipeline(w http.ResponseWriter, r *http.Request)
 	// GetPipeline Версия пайплайна со списком всех версий
 	// (GET /pipelines/{id})
 	GetPipeline(w http.ResponseWriter, r *http.Request, id PipelineId)
+	// ListPipelineVersions Все версии пайплайна
+	// (GET /pipelines/{id}/versions)
+	ListPipelineVersions(w http.ResponseWriter, r *http.Request, id PipelineId)
+	// CreatePipelineVersion Новая версия пайплайна (правка = новая версия, T-21)
+	// (POST /pipelines/{id}/versions)
+	CreatePipelineVersion(w http.ResponseWriter, r *http.Request, id PipelineId)
 	// ListProjects Список проектов
 	// (GET /projects)
 	ListProjects(w http.ResponseWriter, r *http.Request)
 	// CreateProject Зарегистрировать проект
 	// (POST /projects)
 	CreateProject(w http.ResponseWriter, r *http.Request)
+	// DeleteProject Удалить проект КАСКАДНО (раны, стадии, события, гейты, заметки)
+	// (DELETE /projects/{id})
+	DeleteProject(w http.ResponseWriter, r *http.Request, id ProjectId)
 	// GetProject Проект с активными ранами и счётчиком открытых гейтов
 	// (GET /projects/{id})
 	GetProject(w http.ResponseWriter, r *http.Request, id ProjectId)
 	// PatchProject Обновить ide_command / default_branch
 	// (PATCH /projects/{id})
 	PatchProject(w http.ResponseWriter, r *http.Request, id ProjectId)
+	// GetProjectMetrics Агрегированные метрики проекта за период (T-24)
+	// (GET /projects/{id}/metrics)
+	GetProjectMetrics(w http.ResponseWriter, r *http.Request, id ProjectId, params GetProjectMetricsParams)
 	// ListProjectPipelines Пайплайны проекта (+ глобальные)
 	// (GET /projects/{id}/pipelines)
 	ListProjectPipelines(w http.ResponseWriter, r *http.Request, id ProjectId)
@@ -623,9 +1228,21 @@ type ServerInterface interface {
 	// GetRun Полный срез рана (стадии, гейты, артефакты)
 	// (GET /runs/{id})
 	GetRun(w http.ResponseWriter, r *http.Request, id RunId)
+	// GetArtifactContent Содержимое файла артефакта (F-02, fix-task-4). Путь читается только
+	// из записи БД и обязан оставаться внутри каталога рана (run_dir);
+	// чужой/несуществующий артефакт, выход за run_dir и отсутствующий файл
+	// → 404. Файл больше cap'а (5 МБ) → 413 (фронт предлагает скачать).
+	// (GET /runs/{id}/artifacts/{artifactId}/content)
+	GetArtifactContent(w http.ResponseWriter, r *http.Request, id RunId, artifactId int64)
 	// ListRunEvents REST-доступ к журналу событий рана
 	// (GET /runs/{id}/events)
 	ListRunEvents(w http.ResponseWriter, r *http.Request, id RunId, params ListRunEventsParams)
+	// GetRunMetrics Метрики рана per stage + итоги (D-51, T-24)
+	// (GET /runs/{id}/metrics)
+	GetRunMetrics(w http.ResponseWriter, r *http.Request, id RunId)
+	// GetRunMetricsCsv Экспорт метрик рана в CSV (T-24)
+	// (GET /runs/{id}/metrics.csv)
+	GetRunMetricsCsv(w http.ResponseWriter, r *http.Request, id RunId)
 	// CreateNote Queue note к ближайшему событию рана (D-22)
 	// (POST /runs/{id}/notes)
 	CreateNote(w http.ResponseWriter, r *http.Request, id RunId, params CreateNoteParams)
@@ -635,9 +1252,21 @@ type ServerInterface interface {
 	// StopRun Остановить ран (идемпотентно, D-14)
 	// (POST /runs/{id}/stop)
 	StopRun(w http.ResponseWriter, r *http.Request, id RunId, params StopRunParams)
+	// GetSettings Настройки демона (экран настроек UI)
+	// (GET /settings)
+	GetSettings(w http.ResponseWriter, r *http.Request)
+	// PutSupervisorSettings Параметры supervisor (watchdog, пул процессов; hot-apply)
+	// (PUT /settings/supervisor)
+	PutSupervisorSettings(w http.ResponseWriter, r *http.Request)
+	// PutTelegramSettings Настройки TG-бота (токен валидируется через getMe, hot-apply адаптера)
+	// (PUT /settings/telegram)
+	PutTelegramSettings(w http.ResponseWriter, r *http.Request)
 	// InterruptStage Interrupt & Steer (D-22) — прервать этап и резюмить с сообщением
 	// (POST /stages/{id}/interrupt)
 	InterruptStage(w http.ResponseWriter, r *http.Request, id StageId)
+	// PairTelegram Привязка TG-чата по коду из /start (T-19)
+	// (POST /telegram/pair)
+	PairTelegram(w http.ResponseWriter, r *http.Request)
 	// Version Версия демона
 	// (GET /version)
 	Version(w http.ResponseWriter, r *http.Request)
@@ -654,6 +1283,39 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// FsBrowse operation middleware
+func (siw *ServerInterfaceWrapper) FsBrowse(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params FsBrowseParams
+
+	// ------------- Optional query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FsBrowse(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // ResolveGate operation middleware
 func (siw *ServerInterfaceWrapper) ResolveGate(w http.ResponseWriter, r *http.Request) {
@@ -719,6 +1381,331 @@ func (siw *ServerInterfaceWrapper) Healthz(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// ListLessons operation middleware
+func (siw *ServerInterfaceWrapper) ListLessons(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListLessonsParams
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "scope" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "scope", r.URL.Query(), &params.Scope, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "scope"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "scope", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "project_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "project_id", r.URL.Query(), &params.ProjectId, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "project_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "project_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListLessons(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetLesson operation middleware
+func (siw *ServerInterfaceWrapper) GetLesson(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetLesson(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PatchLesson operation middleware
+func (siw *ServerInterfaceWrapper) PatchLesson(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PatchLesson(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// MemoryReadFile operation middleware
+func (siw *ServerInterfaceWrapper) MemoryReadFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MemoryReadFileParams
+
+	// ------------- Required query parameter "scope" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "scope", r.URL.Query(), &params.Scope, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "scope"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "scope", Err: err})
+		}
+		return
+	}
+
+	// ------------- Required query parameter "vendor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "vendor", r.URL.Query(), &params.Vendor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "vendor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "vendor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "project_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "project_id", r.URL.Query(), &params.ProjectId, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "project_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "project_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.MemoryReadFile(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// MemoryWriteFile operation middleware
+func (siw *ServerInterfaceWrapper) MemoryWriteFile(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.MemoryWriteFile(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// MemoryHistory operation middleware
+func (siw *ServerInterfaceWrapper) MemoryHistory(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MemoryHistoryParams
+
+	// ------------- Required query parameter "vendor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "vendor", r.URL.Query(), &params.Vendor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "vendor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "vendor", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.MemoryHistory(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// MemoryPromote operation middleware
+func (siw *ServerInterfaceWrapper) MemoryPromote(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.MemoryPromote(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// MemoryTree operation middleware
+func (siw *ServerInterfaceWrapper) MemoryTree(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.MemoryTree(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetPipelineVersion operation middleware
+func (siw *ServerInterfaceWrapper) GetPipelineVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "vid" -------------
+	var vid int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "vid", r.PathValue("vid"), &vid, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "vid", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPipelineVersion(w, r, vid)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ExportPipelineVersion operation middleware
+func (siw *ServerInterfaceWrapper) ExportPipelineVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "vid" -------------
+	var vid int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "vid", r.PathValue("vid"), &vid, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "vid", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ExportPipelineVersion(w, r, vid)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreatePipeline operation middleware
+func (siw *ServerInterfaceWrapper) CreatePipeline(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreatePipeline(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ImportPipeline operation middleware
+func (siw *ServerInterfaceWrapper) ImportPipeline(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ImportPipeline(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetPipeline operation middleware
 func (siw *ServerInterfaceWrapper) GetPipeline(w http.ResponseWriter, r *http.Request) {
 
@@ -736,6 +1723,58 @@ func (siw *ServerInterfaceWrapper) GetPipeline(w http.ResponseWriter, r *http.Re
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetPipeline(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListPipelineVersions operation middleware
+func (siw *ServerInterfaceWrapper) ListPipelineVersions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id PipelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPipelineVersions(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreatePipelineVersion operation middleware
+func (siw *ServerInterfaceWrapper) CreatePipelineVersion(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id PipelineId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreatePipelineVersion(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -764,6 +1803,32 @@ func (siw *ServerInterfaceWrapper) CreateProject(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CreateProject(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteProject operation middleware
+func (siw *ServerInterfaceWrapper) DeleteProject(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteProject(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -816,6 +1881,48 @@ func (siw *ServerInterfaceWrapper) PatchProject(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PatchProject(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetProjectMetrics operation middleware
+func (siw *ServerInterfaceWrapper) GetProjectMetrics(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ProjectId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetProjectMetricsParams
+
+	// ------------- Optional query parameter "period" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "period", r.URL.Query(), &params.Period, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "period"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "period", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetProjectMetrics(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -990,6 +2097,41 @@ func (siw *ServerInterfaceWrapper) GetRun(w http.ResponseWriter, r *http.Request
 	handler.ServeHTTP(w, r)
 }
 
+// GetArtifactContent operation middleware
+func (siw *ServerInterfaceWrapper) GetArtifactContent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id RunId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "artifactId" -------------
+	var artifactId int64
+
+	err = runtime.BindStyledParameterWithOptions("simple", "artifactId", r.PathValue("artifactId"), &artifactId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "int64", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "artifactId", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetArtifactContent(w, r, id, artifactId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListRunEvents operation middleware
 func (siw *ServerInterfaceWrapper) ListRunEvents(w http.ResponseWriter, r *http.Request) {
 
@@ -1036,6 +2178,58 @@ func (siw *ServerInterfaceWrapper) ListRunEvents(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListRunEvents(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetRunMetrics operation middleware
+func (siw *ServerInterfaceWrapper) GetRunMetrics(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id RunId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRunMetrics(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetRunMetricsCsv operation middleware
+func (siw *ServerInterfaceWrapper) GetRunMetricsCsv(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id RunId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetRunMetricsCsv(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1195,6 +2389,48 @@ func (siw *ServerInterfaceWrapper) StopRun(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// GetSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutSupervisorSettings operation middleware
+func (siw *ServerInterfaceWrapper) PutSupervisorSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutSupervisorSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutTelegramSettings operation middleware
+func (siw *ServerInterfaceWrapper) PutTelegramSettings(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutTelegramSettings(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // InterruptStage operation middleware
 func (siw *ServerInterfaceWrapper) InterruptStage(w http.ResponseWriter, r *http.Request) {
 
@@ -1212,6 +2448,20 @@ func (siw *ServerInterfaceWrapper) InterruptStage(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.InterruptStage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PairTelegram operation middleware
+func (siw *ServerInterfaceWrapper) PairTelegram(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PairTelegram(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1418,10 +2668,17 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/version", wrapper.Version)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects", wrapper.ListProjects)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/projects", wrapper.CreateProject)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/projects/{id}", wrapper.DeleteProject)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{id}", wrapper.GetProject)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/projects/{id}", wrapper.PatchProject)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{id}/pipelines", wrapper.ListProjectPipelines)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/pipelines/{id}", wrapper.GetPipeline)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/pipelines", wrapper.CreatePipeline)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/pipelines/import", wrapper.ImportPipeline)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/pipelines/{id}/versions", wrapper.ListPipelineVersions)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/pipelines/{id}/versions", wrapper.CreatePipelineVersion)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/pipeline-versions/{vid}", wrapper.GetPipelineVersion)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/pipeline-versions/{vid}/export", wrapper.ExportPipelineVersion)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs", wrapper.ListRuns)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/runs", wrapper.CreateRun)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}", wrapper.GetRun)
@@ -1429,14 +2686,70 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/runs/{id}/resume", wrapper.ResumeRun)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/runs/{id}/notes", wrapper.CreateNote)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}/events", wrapper.ListRunEvents)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}/artifacts/{artifactId}/content", wrapper.GetArtifactContent)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}/metrics", wrapper.GetRunMetrics)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/runs/{id}/metrics.csv", wrapper.GetRunMetricsCsv)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/projects/{id}/metrics", wrapper.GetProjectMetrics)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/gates/{id}/resolve", wrapper.ResolveGate)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/stages/{id}/interrupt", wrapper.InterruptStage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/telegram/pair", wrapper.PairTelegram)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/settings", wrapper.GetSettings)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/settings/telegram", wrapper.PutTelegramSettings)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/settings/supervisor", wrapper.PutSupervisorSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/fs/browse", wrapper.FsBrowse)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/lessons", wrapper.ListLessons)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/lessons/{id}", wrapper.GetLesson)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/lessons/{id}", wrapper.PatchLesson)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/memory/tree", wrapper.MemoryTree)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/memory/file", wrapper.MemoryReadFile)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/memory/file", wrapper.MemoryWriteFile)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/memory/history", wrapper.MemoryHistory)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/memory/promote", wrapper.MemoryPromote)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/ws", wrapper.EventsWs)
 
 	return m
 }
 
 type ErrorJSONResponse Error
+
+type FsBrowseRequestObject struct {
+	Params FsBrowseParams
+}
+
+type FsBrowseResponseObject interface {
+	VisitFsBrowseResponse(w http.ResponseWriter) error
+}
+
+type FsBrowse200JSONResponse FsBrowseResult
+
+func (response FsBrowse200JSONResponse) VisitFsBrowseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FsBrowsedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response FsBrowsedefaultJSONResponse) VisitFsBrowseResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type ResolveGateRequestObject struct {
 	Id     GateId `json:"id"`
@@ -1497,6 +2810,482 @@ func (response Healthz200TextResponse) VisitHealthzResponse(w http.ResponseWrite
 	return err
 }
 
+type ListLessonsRequestObject struct {
+	Params ListLessonsParams
+}
+
+type ListLessonsResponseObject interface {
+	VisitListLessonsResponse(w http.ResponseWriter) error
+}
+
+type ListLessons200JSONResponse []Lesson
+
+func (response ListLessons200JSONResponse) VisitListLessonsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListLessonsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListLessonsdefaultJSONResponse) VisitListLessonsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetLessonRequestObject struct {
+	Id string `json:"id"`
+}
+
+type GetLessonResponseObject interface {
+	VisitGetLessonResponse(w http.ResponseWriter) error
+}
+
+type GetLesson200JSONResponse LessonDetail
+
+func (response GetLesson200JSONResponse) VisitGetLessonResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetLessondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetLessondefaultJSONResponse) VisitGetLessonResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PatchLessonRequestObject struct {
+	Id   string `json:"id"`
+	Body *PatchLessonJSONRequestBody
+}
+
+type PatchLessonResponseObject interface {
+	VisitPatchLessonResponse(w http.ResponseWriter) error
+}
+
+type PatchLesson200JSONResponse Lesson
+
+func (response PatchLesson200JSONResponse) VisitPatchLessonResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PatchLessondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PatchLessondefaultJSONResponse) VisitPatchLessonResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryReadFileRequestObject struct {
+	Params MemoryReadFileParams
+}
+
+type MemoryReadFileResponseObject interface {
+	VisitMemoryReadFileResponse(w http.ResponseWriter) error
+}
+
+type MemoryReadFile200JSONResponse MemoryFileContent
+
+func (response MemoryReadFile200JSONResponse) VisitMemoryReadFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryReadFiledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response MemoryReadFiledefaultJSONResponse) VisitMemoryReadFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryWriteFileRequestObject struct {
+	Body *MemoryWriteFileJSONRequestBody
+}
+
+type MemoryWriteFileResponseObject interface {
+	VisitMemoryWriteFileResponse(w http.ResponseWriter) error
+}
+
+type MemoryWriteFile200JSONResponse MemoryFileContent
+
+func (response MemoryWriteFile200JSONResponse) VisitMemoryWriteFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryWriteFiledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response MemoryWriteFiledefaultJSONResponse) VisitMemoryWriteFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryHistoryRequestObject struct {
+	Params MemoryHistoryParams
+}
+
+type MemoryHistoryResponseObject interface {
+	VisitMemoryHistoryResponse(w http.ResponseWriter) error
+}
+
+type MemoryHistory200JSONResponse []MemoryHistoryEntry
+
+func (response MemoryHistory200JSONResponse) VisitMemoryHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryHistorydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response MemoryHistorydefaultJSONResponse) VisitMemoryHistoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryPromoteRequestObject struct {
+	Body *MemoryPromoteJSONRequestBody
+}
+
+type MemoryPromoteResponseObject interface {
+	VisitMemoryPromoteResponse(w http.ResponseWriter) error
+}
+
+type MemoryPromote200JSONResponse struct {
+	Path *string `json:"path,omitempty"`
+}
+
+func (response MemoryPromote200JSONResponse) VisitMemoryPromoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryPromotedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response MemoryPromotedefaultJSONResponse) VisitMemoryPromoteResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryTreeRequestObject struct {
+}
+
+type MemoryTreeResponseObject interface {
+	VisitMemoryTreeResponse(w http.ResponseWriter) error
+}
+
+type MemoryTree200JSONResponse MemoryTree
+
+func (response MemoryTree200JSONResponse) VisitMemoryTreeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type MemoryTreedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response MemoryTreedefaultJSONResponse) VisitMemoryTreeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPipelineVersionRequestObject struct {
+	Vid int64 `json:"vid"`
+}
+
+type GetPipelineVersionResponseObject interface {
+	VisitGetPipelineVersionResponse(w http.ResponseWriter) error
+}
+
+type GetPipelineVersion200JSONResponse Pipeline
+
+func (response GetPipelineVersion200JSONResponse) VisitGetPipelineVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPipelineVersiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetPipelineVersiondefaultJSONResponse) VisitGetPipelineVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ExportPipelineVersionRequestObject struct {
+	Vid int64 `json:"vid"`
+}
+
+type ExportPipelineVersionResponseObject interface {
+	VisitExportPipelineVersionResponse(w http.ResponseWriter) error
+}
+
+type ExportPipelineVersion200TextyamlResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response ExportPipelineVersion200TextyamlResponse) VisitExportPipelineVersionResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/yaml")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type ExportPipelineVersiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ExportPipelineVersiondefaultJSONResponse) VisitExportPipelineVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePipelineRequestObject struct {
+	Body *CreatePipelineJSONRequestBody
+}
+
+type CreatePipelineResponseObject interface {
+	VisitCreatePipelineResponse(w http.ResponseWriter) error
+}
+
+type CreatePipeline201JSONResponse Pipeline
+
+func (response CreatePipeline201JSONResponse) VisitCreatePipelineResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePipelinedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreatePipelinedefaultJSONResponse) VisitCreatePipelineResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportPipelineRequestObject struct {
+	Body *ImportPipelineJSONRequestBody
+}
+
+type ImportPipelineResponseObject interface {
+	VisitImportPipelineResponse(w http.ResponseWriter) error
+}
+
+type ImportPipeline201JSONResponse Pipeline
+
+func (response ImportPipeline201JSONResponse) VisitImportPipelineResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportPipelinedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ImportPipelinedefaultJSONResponse) VisitImportPipelineResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetPipelineRequestObject struct {
 	Id PipelineId `json:"id"`
 }
@@ -1525,6 +3314,85 @@ type GetPipelinedefaultJSONResponse struct {
 }
 
 func (response GetPipelinedefaultJSONResponse) VisitGetPipelineResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPipelineVersionsRequestObject struct {
+	Id PipelineId `json:"id"`
+}
+
+type ListPipelineVersionsResponseObject interface {
+	VisitListPipelineVersionsResponse(w http.ResponseWriter) error
+}
+
+type ListPipelineVersions200JSONResponse []Pipeline
+
+func (response ListPipelineVersions200JSONResponse) VisitListPipelineVersionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPipelineVersionsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListPipelineVersionsdefaultJSONResponse) VisitListPipelineVersionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePipelineVersionRequestObject struct {
+	Id   PipelineId `json:"id"`
+	Body *CreatePipelineVersionJSONRequestBody
+}
+
+type CreatePipelineVersionResponseObject interface {
+	VisitCreatePipelineVersionResponse(w http.ResponseWriter) error
+}
+
+type CreatePipelineVersion201JSONResponse Pipeline
+
+func (response CreatePipelineVersion201JSONResponse) VisitCreatePipelineVersionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePipelineVersiondefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreatePipelineVersiondefaultJSONResponse) VisitCreatePipelineVersionResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1627,6 +3495,47 @@ func (response CreateProjectdefaultJSONResponse) VisitCreateProjectResponse(w ht
 	return err
 }
 
+type DeleteProjectRequestObject struct {
+	Id ProjectId `json:"id"`
+}
+
+type DeleteProjectResponseObject interface {
+	VisitDeleteProjectResponse(w http.ResponseWriter) error
+}
+
+type DeleteProject200JSONResponse struct {
+	Deleted *bool `json:"deleted,omitempty"`
+}
+
+func (response DeleteProject200JSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteProjectdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response DeleteProjectdefaultJSONResponse) VisitDeleteProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProjectRequestObject struct {
 	Id ProjectId `json:"id"`
 }
@@ -1695,6 +3604,46 @@ type PatchProjectdefaultJSONResponse struct {
 }
 
 func (response PatchProjectdefaultJSONResponse) VisitPatchProjectResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProjectMetricsRequestObject struct {
+	Id     ProjectId `json:"id"`
+	Params GetProjectMetricsParams
+}
+
+type GetProjectMetricsResponseObject interface {
+	VisitGetProjectMetricsResponse(w http.ResponseWriter) error
+}
+
+type GetProjectMetrics200JSONResponse ProjectMetrics
+
+func (response GetProjectMetrics200JSONResponse) VisitGetProjectMetricsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetProjectMetricsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetProjectMetricsdefaultJSONResponse) VisitGetProjectMetricsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -1877,6 +3826,57 @@ func (response GetRundefaultJSONResponse) VisitGetRunResponse(w http.ResponseWri
 	return err
 }
 
+type GetArtifactContentRequestObject struct {
+	Id         RunId `json:"id"`
+	ArtifactId int64 `json:"artifactId"`
+}
+
+type GetArtifactContentResponseObject interface {
+	VisitGetArtifactContentResponse(w http.ResponseWriter) error
+}
+
+type GetArtifactContent200TextResponse string
+
+func (response GetArtifactContent200TextResponse) VisitGetArtifactContentResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(fmt.Sprint(response)))
+	return err
+}
+
+type GetArtifactContent413JSONResponse Error
+
+func (response GetArtifactContent413JSONResponse) VisitGetArtifactContentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(413)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetArtifactContentdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetArtifactContentdefaultJSONResponse) VisitGetArtifactContentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListRunEventsRequestObject struct {
 	Id     RunId `json:"id"`
 	Params ListRunEventsParams
@@ -1906,6 +3906,90 @@ type ListRunEventsdefaultJSONResponse struct {
 }
 
 func (response ListRunEventsdefaultJSONResponse) VisitListRunEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRunMetricsRequestObject struct {
+	Id RunId `json:"id"`
+}
+
+type GetRunMetricsResponseObject interface {
+	VisitGetRunMetricsResponse(w http.ResponseWriter) error
+}
+
+type GetRunMetrics200JSONResponse RunMetrics
+
+func (response GetRunMetrics200JSONResponse) VisitGetRunMetricsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRunMetricsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetRunMetricsdefaultJSONResponse) VisitGetRunMetricsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetRunMetricsCsvRequestObject struct {
+	Id RunId `json:"id"`
+}
+
+type GetRunMetricsCsvResponseObject interface {
+	VisitGetRunMetricsCsvResponse(w http.ResponseWriter) error
+}
+
+type GetRunMetricsCsv200TextcsvResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response GetRunMetricsCsv200TextcsvResponse) VisitGetRunMetricsCsvResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/csv")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	_, err := io.Copy(w, response.Body)
+	return err
+}
+
+type GetRunMetricsCsvdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetRunMetricsCsvdefaultJSONResponse) VisitGetRunMetricsCsvResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2038,6 +4122,105 @@ func (response StopRundefaultJSONResponse) VisitStopRunResponse(w http.ResponseW
 	return err
 }
 
+type GetSettingsRequestObject struct {
+}
+
+type GetSettingsResponseObject interface {
+	VisitGetSettingsResponse(w http.ResponseWriter) error
+}
+
+type GetSettings200JSONResponse Settings
+
+func (response GetSettings200JSONResponse) VisitGetSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutSupervisorSettingsRequestObject struct {
+	Body *PutSupervisorSettingsJSONRequestBody
+}
+
+type PutSupervisorSettingsResponseObject interface {
+	VisitPutSupervisorSettingsResponse(w http.ResponseWriter) error
+}
+
+type PutSupervisorSettings200JSONResponse SupervisorSettings
+
+func (response PutSupervisorSettings200JSONResponse) VisitPutSupervisorSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutSupervisorSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PutSupervisorSettingsdefaultJSONResponse) VisitPutSupervisorSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutTelegramSettingsRequestObject struct {
+	Body *PutTelegramSettingsJSONRequestBody
+}
+
+type PutTelegramSettingsResponseObject interface {
+	VisitPutTelegramSettingsResponse(w http.ResponseWriter) error
+}
+
+type PutTelegramSettings200JSONResponse TelegramSettings
+
+func (response PutTelegramSettings200JSONResponse) VisitPutTelegramSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutTelegramSettingsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PutTelegramSettingsdefaultJSONResponse) VisitPutTelegramSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type InterruptStageRequestObject struct {
 	Id   StageId `json:"id"`
 	Body *InterruptStageJSONRequestBody
@@ -2067,6 +4250,45 @@ type InterruptStagedefaultJSONResponse struct {
 }
 
 func (response InterruptStagedefaultJSONResponse) VisitInterruptStageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PairTelegramRequestObject struct {
+	Body *PairTelegramJSONRequestBody
+}
+
+type PairTelegramResponseObject interface {
+	VisitPairTelegramResponse(w http.ResponseWriter) error
+}
+
+type PairTelegram200JSONResponse PairTelegramResponse
+
+func (response PairTelegram200JSONResponse) VisitPairTelegramResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PairTelegramdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PairTelegramdefaultJSONResponse) VisitPairTelegramResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -2125,27 +4347,78 @@ func (response EventsWs401Response) VisitEventsWsResponse(w http.ResponseWriter)
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// FsBrowse Листинг подкаталогов (выбор папки проекта в браузерном UI, T-16)
+	// (GET /fs/browse)
+	FsBrowse(ctx context.Context, request FsBrowseRequestObject) (FsBrowseResponseObject, error)
 	// ResolveGate Резолв гейта (идемпотентно; повтор → 200 + already_resolved)
 	// (POST /gates/{id}/resolve)
 	ResolveGate(ctx context.Context, request ResolveGateRequestObject) (ResolveGateResponseObject, error)
 	// Healthz Liveness probe демона (без auth)
 	// (GET /healthz)
 	Healthz(ctx context.Context, request HealthzRequestObject) (HealthzResponseObject, error)
+	// ListLessons Список уроков (D-52, T-29)
+	// (GET /lessons)
+	ListLessons(ctx context.Context, request ListLessonsRequestObject) (ListLessonsResponseObject, error)
+	// GetLesson Урок с содержимым файла
+	// (GET /lessons/{id})
+	GetLesson(ctx context.Context, request GetLessonRequestObject) (GetLessonResponseObject, error)
+	// PatchLesson Смена статуса урока (confirm/reject из UI)
+	// (PATCH /lessons/{id})
+	PatchLesson(ctx context.Context, request PatchLessonRequestObject) (PatchLessonResponseObject, error)
+	// MemoryReadFile Содержимое файла памяти
+	// (GET /memory/file)
+	MemoryReadFile(ctx context.Context, request MemoryReadFileRequestObject) (MemoryReadFileResponseObject, error)
+	// MemoryWriteFile Ручная правка файла памяти (T-23)
+	// (PUT /memory/file)
+	MemoryWriteFile(ctx context.Context, request MemoryWriteFileRequestObject) (MemoryWriteFileResponseObject, error)
+	// MemoryHistory История изменений файла глобальной памяти (git log)
+	// (GET /memory/history)
+	MemoryHistory(ctx context.Context, request MemoryHistoryRequestObject) (MemoryHistoryResponseObject, error)
+	// MemoryPromote Промоушн записи локальной памяти в глобальную (T-23)
+	// (POST /memory/promote)
+	MemoryPromote(ctx context.Context, request MemoryPromoteRequestObject) (MemoryPromoteResponseObject, error)
+	// MemoryTree Дерево vendor-памяти (глобальная + по проектам), T-23
+	// (GET /memory/tree)
+	MemoryTree(ctx context.Context, request MemoryTreeRequestObject) (MemoryTreeResponseObject, error)
+	// GetPipelineVersion Конкретная версия пайплайна
+	// (GET /pipeline-versions/{vid})
+	GetPipelineVersion(ctx context.Context, request GetPipelineVersionRequestObject) (GetPipelineVersionResponseObject, error)
+	// ExportPipelineVersion Экспорт версии в YAML (T-21)
+	// (GET /pipeline-versions/{vid}/export)
+	ExportPipelineVersion(ctx context.Context, request ExportPipelineVersionRequestObject) (ExportPipelineVersionResponseObject, error)
+	// CreatePipeline Создать пайплайн (первая версия)
+	// (POST /pipelines)
+	CreatePipeline(ctx context.Context, request CreatePipelineRequestObject) (CreatePipelineResponseObject, error)
+	// ImportPipeline Импорт пайплайна из YAML (T-21)
+	// (POST /pipelines/import)
+	ImportPipeline(ctx context.Context, request ImportPipelineRequestObject) (ImportPipelineResponseObject, error)
 	// GetPipeline Версия пайплайна со списком всех версий
 	// (GET /pipelines/{id})
 	GetPipeline(ctx context.Context, request GetPipelineRequestObject) (GetPipelineResponseObject, error)
+	// ListPipelineVersions Все версии пайплайна
+	// (GET /pipelines/{id}/versions)
+	ListPipelineVersions(ctx context.Context, request ListPipelineVersionsRequestObject) (ListPipelineVersionsResponseObject, error)
+	// CreatePipelineVersion Новая версия пайплайна (правка = новая версия, T-21)
+	// (POST /pipelines/{id}/versions)
+	CreatePipelineVersion(ctx context.Context, request CreatePipelineVersionRequestObject) (CreatePipelineVersionResponseObject, error)
 	// ListProjects Список проектов
 	// (GET /projects)
 	ListProjects(ctx context.Context, request ListProjectsRequestObject) (ListProjectsResponseObject, error)
 	// CreateProject Зарегистрировать проект
 	// (POST /projects)
 	CreateProject(ctx context.Context, request CreateProjectRequestObject) (CreateProjectResponseObject, error)
+	// DeleteProject Удалить проект КАСКАДНО (раны, стадии, события, гейты, заметки)
+	// (DELETE /projects/{id})
+	DeleteProject(ctx context.Context, request DeleteProjectRequestObject) (DeleteProjectResponseObject, error)
 	// GetProject Проект с активными ранами и счётчиком открытых гейтов
 	// (GET /projects/{id})
 	GetProject(ctx context.Context, request GetProjectRequestObject) (GetProjectResponseObject, error)
 	// PatchProject Обновить ide_command / default_branch
 	// (PATCH /projects/{id})
 	PatchProject(ctx context.Context, request PatchProjectRequestObject) (PatchProjectResponseObject, error)
+	// GetProjectMetrics Агрегированные метрики проекта за период (T-24)
+	// (GET /projects/{id}/metrics)
+	GetProjectMetrics(ctx context.Context, request GetProjectMetricsRequestObject) (GetProjectMetricsResponseObject, error)
 	// ListProjectPipelines Пайплайны проекта (+ глобальные)
 	// (GET /projects/{id}/pipelines)
 	ListProjectPipelines(ctx context.Context, request ListProjectPipelinesRequestObject) (ListProjectPipelinesResponseObject, error)
@@ -2158,9 +4431,21 @@ type StrictServerInterface interface {
 	// GetRun Полный срез рана (стадии, гейты, артефакты)
 	// (GET /runs/{id})
 	GetRun(ctx context.Context, request GetRunRequestObject) (GetRunResponseObject, error)
+	// GetArtifactContent Содержимое файла артефакта (F-02, fix-task-4). Путь читается только
+	// из записи БД и обязан оставаться внутри каталога рана (run_dir);
+	// чужой/несуществующий артефакт, выход за run_dir и отсутствующий файл
+	// → 404. Файл больше cap'а (5 МБ) → 413 (фронт предлагает скачать).
+	// (GET /runs/{id}/artifacts/{artifactId}/content)
+	GetArtifactContent(ctx context.Context, request GetArtifactContentRequestObject) (GetArtifactContentResponseObject, error)
 	// ListRunEvents REST-доступ к журналу событий рана
 	// (GET /runs/{id}/events)
 	ListRunEvents(ctx context.Context, request ListRunEventsRequestObject) (ListRunEventsResponseObject, error)
+	// GetRunMetrics Метрики рана per stage + итоги (D-51, T-24)
+	// (GET /runs/{id}/metrics)
+	GetRunMetrics(ctx context.Context, request GetRunMetricsRequestObject) (GetRunMetricsResponseObject, error)
+	// GetRunMetricsCsv Экспорт метрик рана в CSV (T-24)
+	// (GET /runs/{id}/metrics.csv)
+	GetRunMetricsCsv(ctx context.Context, request GetRunMetricsCsvRequestObject) (GetRunMetricsCsvResponseObject, error)
 	// CreateNote Queue note к ближайшему событию рана (D-22)
 	// (POST /runs/{id}/notes)
 	CreateNote(ctx context.Context, request CreateNoteRequestObject) (CreateNoteResponseObject, error)
@@ -2170,9 +4455,21 @@ type StrictServerInterface interface {
 	// StopRun Остановить ран (идемпотентно, D-14)
 	// (POST /runs/{id}/stop)
 	StopRun(ctx context.Context, request StopRunRequestObject) (StopRunResponseObject, error)
+	// GetSettings Настройки демона (экран настроек UI)
+	// (GET /settings)
+	GetSettings(ctx context.Context, request GetSettingsRequestObject) (GetSettingsResponseObject, error)
+	// PutSupervisorSettings Параметры supervisor (watchdog, пул процессов; hot-apply)
+	// (PUT /settings/supervisor)
+	PutSupervisorSettings(ctx context.Context, request PutSupervisorSettingsRequestObject) (PutSupervisorSettingsResponseObject, error)
+	// PutTelegramSettings Настройки TG-бота (токен валидируется через getMe, hot-apply адаптера)
+	// (PUT /settings/telegram)
+	PutTelegramSettings(ctx context.Context, request PutTelegramSettingsRequestObject) (PutTelegramSettingsResponseObject, error)
 	// InterruptStage Interrupt & Steer (D-22) — прервать этап и резюмить с сообщением
 	// (POST /stages/{id}/interrupt)
 	InterruptStage(ctx context.Context, request InterruptStageRequestObject) (InterruptStageResponseObject, error)
+	// PairTelegram Привязка TG-чата по коду из /start (T-19)
+	// (POST /telegram/pair)
+	PairTelegram(ctx context.Context, request PairTelegramRequestObject) (PairTelegramResponseObject, error)
 	// Version Версия демона
 	// (GET /version)
 	Version(ctx context.Context, request VersionRequestObject) (VersionResponseObject, error)
@@ -2218,6 +4515,32 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// FsBrowse operation middleware
+func (sh *strictHandler) FsBrowse(w http.ResponseWriter, r *http.Request, params FsBrowseParams) {
+	var request FsBrowseRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FsBrowse(ctx, request.(FsBrowseRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FsBrowse")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FsBrowseResponseObject); ok {
+		if err := validResponse.VisitFsBrowseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // ResolveGate operation middleware
@@ -2278,6 +4601,343 @@ func (sh *strictHandler) Healthz(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ListLessons operation middleware
+func (sh *strictHandler) ListLessons(w http.ResponseWriter, r *http.Request, params ListLessonsParams) {
+	var request ListLessonsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListLessons(ctx, request.(ListLessonsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListLessons")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListLessonsResponseObject); ok {
+		if err := validResponse.VisitListLessonsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetLesson operation middleware
+func (sh *strictHandler) GetLesson(w http.ResponseWriter, r *http.Request, id string) {
+	var request GetLessonRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetLesson(ctx, request.(GetLessonRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetLesson")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetLessonResponseObject); ok {
+		if err := validResponse.VisitGetLessonResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PatchLesson operation middleware
+func (sh *strictHandler) PatchLesson(w http.ResponseWriter, r *http.Request, id string) {
+	var request PatchLessonRequestObject
+
+	request.Id = id
+
+	var body PatchLessonJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PatchLesson(ctx, request.(PatchLessonRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PatchLesson")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PatchLessonResponseObject); ok {
+		if err := validResponse.VisitPatchLessonResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// MemoryReadFile operation middleware
+func (sh *strictHandler) MemoryReadFile(w http.ResponseWriter, r *http.Request, params MemoryReadFileParams) {
+	var request MemoryReadFileRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.MemoryReadFile(ctx, request.(MemoryReadFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "MemoryReadFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(MemoryReadFileResponseObject); ok {
+		if err := validResponse.VisitMemoryReadFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// MemoryWriteFile operation middleware
+func (sh *strictHandler) MemoryWriteFile(w http.ResponseWriter, r *http.Request) {
+	var request MemoryWriteFileRequestObject
+
+	var body MemoryWriteFileJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.MemoryWriteFile(ctx, request.(MemoryWriteFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "MemoryWriteFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(MemoryWriteFileResponseObject); ok {
+		if err := validResponse.VisitMemoryWriteFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// MemoryHistory operation middleware
+func (sh *strictHandler) MemoryHistory(w http.ResponseWriter, r *http.Request, params MemoryHistoryParams) {
+	var request MemoryHistoryRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.MemoryHistory(ctx, request.(MemoryHistoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "MemoryHistory")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(MemoryHistoryResponseObject); ok {
+		if err := validResponse.VisitMemoryHistoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// MemoryPromote operation middleware
+func (sh *strictHandler) MemoryPromote(w http.ResponseWriter, r *http.Request) {
+	var request MemoryPromoteRequestObject
+
+	var body MemoryPromoteJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.MemoryPromote(ctx, request.(MemoryPromoteRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "MemoryPromote")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(MemoryPromoteResponseObject); ok {
+		if err := validResponse.VisitMemoryPromoteResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// MemoryTree operation middleware
+func (sh *strictHandler) MemoryTree(w http.ResponseWriter, r *http.Request) {
+	var request MemoryTreeRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.MemoryTree(ctx, request.(MemoryTreeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "MemoryTree")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(MemoryTreeResponseObject); ok {
+		if err := validResponse.VisitMemoryTreeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPipelineVersion operation middleware
+func (sh *strictHandler) GetPipelineVersion(w http.ResponseWriter, r *http.Request, vid int64) {
+	var request GetPipelineVersionRequestObject
+
+	request.Vid = vid
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPipelineVersion(ctx, request.(GetPipelineVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPipelineVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPipelineVersionResponseObject); ok {
+		if err := validResponse.VisitGetPipelineVersionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ExportPipelineVersion operation middleware
+func (sh *strictHandler) ExportPipelineVersion(w http.ResponseWriter, r *http.Request, vid int64) {
+	var request ExportPipelineVersionRequestObject
+
+	request.Vid = vid
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ExportPipelineVersion(ctx, request.(ExportPipelineVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ExportPipelineVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ExportPipelineVersionResponseObject); ok {
+		if err := validResponse.VisitExportPipelineVersionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreatePipeline operation middleware
+func (sh *strictHandler) CreatePipeline(w http.ResponseWriter, r *http.Request) {
+	var request CreatePipelineRequestObject
+
+	var body CreatePipelineJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreatePipeline(ctx, request.(CreatePipelineRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreatePipeline")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreatePipelineResponseObject); ok {
+		if err := validResponse.VisitCreatePipelineResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ImportPipeline operation middleware
+func (sh *strictHandler) ImportPipeline(w http.ResponseWriter, r *http.Request) {
+	var request ImportPipelineRequestObject
+
+	var body ImportPipelineJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ImportPipeline(ctx, request.(ImportPipelineRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ImportPipeline")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ImportPipelineResponseObject); ok {
+		if err := validResponse.VisitImportPipelineResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetPipeline operation middleware
 func (sh *strictHandler) GetPipeline(w http.ResponseWriter, r *http.Request, id PipelineId) {
 	var request GetPipelineRequestObject
@@ -2297,6 +4957,65 @@ func (sh *strictHandler) GetPipeline(w http.ResponseWriter, r *http.Request, id 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetPipelineResponseObject); ok {
 		if err := validResponse.VisitGetPipelineResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListPipelineVersions operation middleware
+func (sh *strictHandler) ListPipelineVersions(w http.ResponseWriter, r *http.Request, id PipelineId) {
+	var request ListPipelineVersionsRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPipelineVersions(ctx, request.(ListPipelineVersionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPipelineVersions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListPipelineVersionsResponseObject); ok {
+		if err := validResponse.VisitListPipelineVersionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreatePipelineVersion operation middleware
+func (sh *strictHandler) CreatePipelineVersion(w http.ResponseWriter, r *http.Request, id PipelineId) {
+	var request CreatePipelineVersionRequestObject
+
+	request.Id = id
+
+	var body CreatePipelineVersionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreatePipelineVersion(ctx, request.(CreatePipelineVersionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreatePipelineVersion")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreatePipelineVersionResponseObject); ok {
+		if err := validResponse.VisitCreatePipelineVersionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2359,6 +5078,32 @@ func (sh *strictHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// DeleteProject operation middleware
+func (sh *strictHandler) DeleteProject(w http.ResponseWriter, r *http.Request, id ProjectId) {
+	var request DeleteProjectRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteProject(ctx, request.(DeleteProjectRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteProject")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteProjectResponseObject); ok {
+		if err := validResponse.VisitDeleteProjectResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetProject operation middleware
 func (sh *strictHandler) GetProject(w http.ResponseWriter, r *http.Request, id ProjectId) {
 	var request GetProjectRequestObject
@@ -2411,6 +5156,33 @@ func (sh *strictHandler) PatchProject(w http.ResponseWriter, r *http.Request, id
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PatchProjectResponseObject); ok {
 		if err := validResponse.VisitPatchProjectResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetProjectMetrics operation middleware
+func (sh *strictHandler) GetProjectMetrics(w http.ResponseWriter, r *http.Request, id ProjectId, params GetProjectMetricsParams) {
+	var request GetProjectMetricsRequestObject
+
+	request.Id = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetProjectMetrics(ctx, request.(GetProjectMetricsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetProjectMetrics")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetProjectMetricsResponseObject); ok {
+		if err := validResponse.VisitGetProjectMetricsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2529,6 +5301,33 @@ func (sh *strictHandler) GetRun(w http.ResponseWriter, r *http.Request, id RunId
 	}
 }
 
+// GetArtifactContent operation middleware
+func (sh *strictHandler) GetArtifactContent(w http.ResponseWriter, r *http.Request, id RunId, artifactId int64) {
+	var request GetArtifactContentRequestObject
+
+	request.Id = id
+	request.ArtifactId = artifactId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetArtifactContent(ctx, request.(GetArtifactContentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetArtifactContent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetArtifactContentResponseObject); ok {
+		if err := validResponse.VisitGetArtifactContentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListRunEvents operation middleware
 func (sh *strictHandler) ListRunEvents(w http.ResponseWriter, r *http.Request, id RunId, params ListRunEventsParams) {
 	var request ListRunEventsRequestObject
@@ -2549,6 +5348,58 @@ func (sh *strictHandler) ListRunEvents(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListRunEventsResponseObject); ok {
 		if err := validResponse.VisitListRunEventsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetRunMetrics operation middleware
+func (sh *strictHandler) GetRunMetrics(w http.ResponseWriter, r *http.Request, id RunId) {
+	var request GetRunMetricsRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRunMetrics(ctx, request.(GetRunMetricsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRunMetrics")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRunMetricsResponseObject); ok {
+		if err := validResponse.VisitGetRunMetricsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetRunMetricsCsv operation middleware
+func (sh *strictHandler) GetRunMetricsCsv(w http.ResponseWriter, r *http.Request, id RunId) {
+	var request GetRunMetricsCsvRequestObject
+
+	request.Id = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetRunMetricsCsv(ctx, request.(GetRunMetricsCsvRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetRunMetricsCsv")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetRunMetricsCsvResponseObject); ok {
+		if err := validResponse.VisitGetRunMetricsCsvResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2644,6 +5495,92 @@ func (sh *strictHandler) StopRun(w http.ResponseWriter, r *http.Request, id RunI
 	}
 }
 
+// GetSettings operation middleware
+func (sh *strictHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
+	var request GetSettingsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSettings(ctx, request.(GetSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSettingsResponseObject); ok {
+		if err := validResponse.VisitGetSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutSupervisorSettings operation middleware
+func (sh *strictHandler) PutSupervisorSettings(w http.ResponseWriter, r *http.Request) {
+	var request PutSupervisorSettingsRequestObject
+
+	var body PutSupervisorSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutSupervisorSettings(ctx, request.(PutSupervisorSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutSupervisorSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutSupervisorSettingsResponseObject); ok {
+		if err := validResponse.VisitPutSupervisorSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutTelegramSettings operation middleware
+func (sh *strictHandler) PutTelegramSettings(w http.ResponseWriter, r *http.Request) {
+	var request PutTelegramSettingsRequestObject
+
+	var body PutTelegramSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutTelegramSettings(ctx, request.(PutTelegramSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutTelegramSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutTelegramSettingsResponseObject); ok {
+		if err := validResponse.VisitPutTelegramSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // InterruptStage operation middleware
 func (sh *strictHandler) InterruptStage(w http.ResponseWriter, r *http.Request, id StageId) {
 	var request InterruptStageRequestObject
@@ -2670,6 +5607,37 @@ func (sh *strictHandler) InterruptStage(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(InterruptStageResponseObject); ok {
 		if err := validResponse.VisitInterruptStageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PairTelegram operation middleware
+func (sh *strictHandler) PairTelegram(w http.ResponseWriter, r *http.Request) {
+	var request PairTelegramRequestObject
+
+	var body PairTelegramJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PairTelegram(ctx, request.(PairTelegramRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PairTelegram")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PairTelegramResponseObject); ok {
+		if err := validResponse.VisitPairTelegramResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -2732,79 +5700,135 @@ func (sh *strictHandler) EventsWs(w http.ResponseWriter, r *http.Request, params
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

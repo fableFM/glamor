@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
@@ -26,8 +27,11 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 			return err
 		}
 		if has {
+			// содержимое questions.md — прямо в текст гейта (пользователь
+			// отвечает в чате, не открывая файл; запрос 2026-08-17)
+			questionText := s.readQuestionsText(ctx, run, spec.QuestionsPath)
 			contextJSON := marshalEventPayload(map[string]any{
-				"questions_path": expandRunID(spec.QuestionsPath, run.ID),
+				"questions_path": expandPath(spec.QuestionsPath, run.ID, s.runDir(run.ID)),
 				"stage_key":      stage.StageKey,
 				"iteration":      stage.Iteration,
 			})
@@ -35,7 +39,7 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 				RunID:       run.ID,
 				StageID:     &stage.ID,
 				Kind:        dtorep.GateKindQuestion,
-				Question:    fmt.Sprintf("Этап %q задал вопросы (см. %s)", stage.StageKey, spec.QuestionsPath),
+				Question:    questionText,
 				ContextJSON: contextJSON,
 			})
 			return err
@@ -44,6 +48,19 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 
 	// 2. gate_after из спеки (plan_approval/final_review/...)
 	if spec.GateAfter != "" {
+		// lesson_review (T-29): открываем только если distill оставил карточки
+		if spec.GateAfter == "lesson_review" && spec.Artifact != nil {
+			project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
+			if err != nil {
+				return err
+			}
+			lessonsPath := joinPath(project.Path, expandPath(spec.Artifact.Path, run.ID, s.runDir(run.ID)))
+			data, err := os.ReadFile(lessonsPath)
+			if err != nil || !strings.Contains(string(data), "title:") ||
+				strings.Contains(string(data), "NO_LESSONS") {
+				return nil // уроков нет — гейт не открываем
+			}
+		}
 		contextJSON := marshalEventPayload(map[string]any{
 			"stage_key": stage.StageKey,
 			"iteration": stage.Iteration,
@@ -55,11 +72,20 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 				"artifact_paths": []string{spec.Artifact.Path},
 			})
 		}
+		question := gateQuestion(dtorep.GateKind(spec.GateAfter), stage.StageKey)
+		// саммари артефакта — прямо в текст гейта (plan_approval: начало
+		// spec.md; чат-ответ без открытия файла, запрос 2026-08-17)
+		if spec.Artifact != nil {
+			if excerpt := s.readArtifactExcerpt(ctx, run, spec.Artifact.Path); excerpt != "" {
+				question += "\n\n---\n" + excerpt
+			}
+		}
+
 		_, err := s.machine.OpenGate(ctx, runsmachine.OpenGateRequest{
 			RunID:       run.ID,
 			StageID:     &stage.ID,
 			Kind:        dtorep.GateKind(spec.GateAfter),
-			Question:    gateQuestion(dtorep.GateKind(spec.GateAfter), stage.StageKey),
+			Question:    question,
 			ContextJSON: contextJSON,
 		})
 		return err
@@ -88,7 +114,7 @@ func (s *Supervisor) hasQuestionsFile(ctx context.Context, run *dtorep.Run, ques
 	if err != nil {
 		return false, err
 	}
-	info, err := statFile(joinPath(project.Path, expandRunID(questionsPath, run.ID)))
+	info, err := statFile(joinPath(project.Path, expandPath(questionsPath, run.ID, s.runDir(run.ID))))
 	if err != nil {
 		return false, nil // файла нет — вопросов нет
 	}
@@ -163,6 +189,80 @@ func (s *Supervisor) consumeNotes(ctx context.Context, runID string) ([]string, 
 	return messages, nil
 }
 
-func expandRunID(path, runID string) string {
-	return strings.ReplaceAll(path, "{run_id}", runID)
+// expandPath раскрывает плейсхолдеры путей: {run_id} и {run_dir}
+// (каталог артефактов рана ~/.glamor/runs/<id>, T-17).
+func expandPath(path, runID, runDir string) string {
+	path = strings.ReplaceAll(path, "{run_id}", runID)
+	path = strings.ReplaceAll(path, "{run_dir}", runDir)
+	return path
+}
+
+// lessonSignals — маркированные сигналы для distill-этапа (T-29):
+// ответы пользователя на резолвнутых гейтах + заметки рана.
+func (s *Supervisor) lessonSignals(ctx context.Context, runID string) string {
+	var sb strings.Builder
+
+	gates, err := s.gates.ListGatesByRun(ctx, runID)
+	if err == nil {
+		for _, g := range gates {
+			if g.Answer != nil && *g.Answer != "" {
+				fmt.Fprintf(&sb, "Гейт %s (%s) → ответ пользователя: %s\n\n", g.Kind, g.Question, *g.Answer)
+			}
+		}
+	}
+
+	notes, err := s.notes.ListNotesByRun(ctx, runID)
+	if err == nil {
+		for _, n := range notes {
+			fmt.Fprintf(&sb, "Заметка (%s): %s\n\n", n.Kind, n.Text)
+		}
+	}
+
+	if sb.Len() == 0 {
+		return "(сигналов нет)"
+	}
+	return sb.String()
+}
+
+// questionsMaxLen — усечение текста вопросов в гейте (TG-лимиты, чат).
+const questionsMaxLen = 3000
+
+// readQuestionsText — содержимое questions.md для текста гейта (усечённое).
+func (s *Supervisor) readQuestionsText(ctx context.Context, run *dtorep.Run, questionsPath string) string {
+	project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
+	if err != nil {
+		return "Этап задал вопросы (см. questions.md)"
+	}
+	path := joinPath(project.Path, expandPath(questionsPath, run.ID, s.runDir(run.ID)))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "Этап задал вопросы (см. questions.md)"
+	}
+	text := strings.TrimSpace(string(data))
+	if len(text) > questionsMaxLen {
+		text = text[:questionsMaxLen] + "\n…(усечено, полный текст — в questions.md)"
+	}
+	return text
+}
+
+// artifactExcerptMaxLen — усечение саммари артефакта в тексте гейта.
+const artifactExcerptMaxLen = 1500
+
+// readArtifactExcerpt — начало файла артефакта для текста гейта
+// (plan_approval: саммари spec.md прямо в чат).
+func (s *Supervisor) readArtifactExcerpt(ctx context.Context, run *dtorep.Run, artifactPath string) string {
+	project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
+	if err != nil {
+		return ""
+	}
+	path := joinPath(project.Path, expandPath(artifactPath, run.ID, s.runDir(run.ID)))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	text := strings.TrimSpace(string(data))
+	if len(text) > artifactExcerptMaxLen {
+		text = text[:artifactExcerptMaxLen] + "\n…(усечено, полный текст — в файле артефакта)"
+	}
+	return text
 }

@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"thread-err-1"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc make build","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc make build","aggregated_output":"compile error: undefined symbol\n","exit_code":2,"status":"completed"}}
+{"type":"error","message":"429 Too Many Requests: rate limit exceeded"}
+{"type":"turn.failed","error":{"message":"stream disconnected before completion: 503 service unavailable"}}

@@ -1,6 +1,6 @@
 # T-23 Vendor-память: дельты, FTS5, UI
 
-Статус: todo · M3 · зависимости: T-02 (FTS5-заготовка), T-17 (чтение в M1)
+Статус: done (2026-08-17) · M3 · зависимости: T-02 (FTS5-заготовка), T-17 (чтение в M1)
 
 ## Цель
 
@@ -38,3 +38,28 @@
 - FTS5: запрос «kafka idempotency» возвращает релевантный кусок, который
   попадает в промпт планировщика (проверить по prompt-*.md).
 - UNVERIFIED-конвенция соблюдена в шаблоне дельты (секция помечается).
+
+## Итог (2026-08-17)
+
+Сделано:
+- `internal/service/vendormemory/`: ApplyDeltas (runDir/vendor-updates/
+  <vendor>.md → локальная всегда, глобальная при memory_scope=auto;
+  атомарно tmp+rename; артефакт kind=vendor_update; git-коммит дельты в
+  репозиторий глобальной памяти — авто-init, D-32 не применим т.к. это
+  НАША память), PromoteToGlobal, Tree/ReadFile/WriteFile/History (git log),
+  ReindexAll при старте (dirty-check по содержимому), Search (FTS5).
+- `internal/repository/vendorindex`: FTS5 Upsert/Delete/Search (snippet)/
+  IndexedContent. Битый FTS-запрос не роняет ран (пусто, не ошибка).
+- Инъекция в промпт: плейсхолдер {{vendor_memory}} в planner.md —
+  FTS-выдержки по словам задачи (top-5, ~2k токенов бюджет);
+  {{vendor_memory_paths}} сохранён. default.yaml перегенерирован
+  (golden-тест).
+- spec.memory_scope: auto|gate (gate → только локальная + промоушн).
+- API: GET /memory/tree, GET/PUT /memory/file, GET /memory/history,
+  POST /memory/promote (path traversal защита на имени вендора).
+- UI «Память» — в брифе UI-агента (этот батч).
+
+Проверка: дельта → local+global+git log+артефакт; gate → только local;
+FTS «kafka idempotency» → сниппет попадает в промпт (prompt render
+тест); промоушн; ручная правка + переиндексация; traversal-блок. Всё
+с -race зелёное, lint 0 issues.

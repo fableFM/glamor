@@ -26,6 +26,18 @@ controller (internal/controller/{http,ws})
 `internal/daemon`. Их используют service и controller (events — журнал/WS),
 но не repository.
 
+### Доменные пакеты и хранение (доп. 2026-08-17, F-09 fix-task-2)
+
+Доменный пакет (`internal/notify/telegram`, `internal/daemon`,
+`internal/gitx`) МОЖЕТ владеть своим репозиторием собственного состояния
+(`repository/telegram` — whitelist чатов, маркеры доставки, маппинги
+сообщений). Но бизнес-чтения и мутации ЧУЖИХ доменов (runs, stages, gates,
+projects, …) доменный пакет делает ТОЛЬКО через service
+(`service/catalog` — read-агрегации и точечные чтения вида
+`GetRun`/`GetStage`/`ListActiveRunsStatus`; `service/runsapi` —
+API-сценарии действий). Прямой импорт `repository/runs|stages|gates|projects`
+в доменном пакете — нарушение.
+
 ## Запреты (НИКОГДА)
 
 1. **Слой usecase ЗАПРЕЩЁН.** Не создавать `internal/usecase/**`, не
@@ -82,7 +94,11 @@ controller (internal/controller/{http,ws})
 
 ## Проверка перед сдачей
 
-- `grep -rn "internal/repository" backend/internal/controller` — пусто.
+- `grep -rn "internal/repository" backend/internal/controller --include=*.go | grep -v _test.go` —
+  пусто (`*_test.go` исключены: тесты контроллера легально импортируют
+  repository для сборки fixture, доп. 2026-08-17).
+- `grep -rn "internal/repository/\(runs\|stages\|gates\|projects\|pipelines\|notes\|artifacts\)" backend/internal/notify backend/internal/daemon backend/internal/gitx --include=*.go | grep -v _test.go` —
+  пусто (доменные пакеты читают чужие домены через service, F-09).
 - `grep -rn "internal/usecase" backend/` — пусто (слоя не существует).
 - `grep -rn "sql.DB" backend/internal --include=*.go | grep -v repository` —
   пусто (кроме зафиксированного `*sql.Tx`-исключения).

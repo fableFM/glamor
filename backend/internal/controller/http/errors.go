@@ -17,6 +17,13 @@ func errorToResponse(err error) (genapi.Error, int) {
 		return genapi.Error{Code: "dirty_checkout", Message: err.Error(), Details: &details}, 400
 	}
 
+	// run_locked (D-33): 409 + details.branch/run_id занятой ветки (F-02)
+	var locked *cstmerrors.RunLockedError
+	if errors.As(err, &locked) {
+		details := map[string]interface{}{"branch": locked.Branch, "run_id": locked.RunID}
+		return genapi.Error{Code: "run_locked", Message: err.Error(), Details: &details}, 409
+	}
+
 	code := "internal"
 	status := 500
 
@@ -34,6 +41,8 @@ func errorToResponse(err error) (genapi.Error, int) {
 		code, status = "duplicate", 409
 	case errors.Is(err, cstmerrors.ErrValidation):
 		code, status = "validation", 400
+	case errors.Is(err, cstmerrors.ErrTooLarge):
+		code, status = "too_large", 413
 	}
 
 	return genapi.Error{Code: code, Message: err.Error()}, status

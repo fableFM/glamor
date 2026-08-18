@@ -97,3 +97,20 @@ SQLite: CRUD проектов, идемпотентность POST /runs (201→
 run_locked 409, resolve гейта дважды (200 already_resolved / 409),
 stop/resume семантика, notes+steer в срезе рана, auth 401 без/с неверным
 токеном, /healthz без auth. `make lint` — 0 issues; `make gen` идемпотентен.
+
+## Дополнение к Итогу (2026-08-17, fix-task-4)
+
+- F-01: `runsapi.CreateRun` пишет событие `run.created` в журнал в той же
+  транзакции, что и создание рана (D-11); повтор по Idempotency-Key второго
+  события не пишет (D-12). В спеке: `EventKind` += `run.created`, новая
+  схема `RunCreatedPayload`, `EventPayload` документирует маппинг.
+- F-02: новый эндпоинт `GET /runs/{id}/artifacts/{artifactId}/content`
+  (text/plain; чужой/несуществующий/traversal → 404; > 5 МБ → 413
+  `too_large`). Реализован через strict-интерфейс oapi-codegen (прецедент
+  text/yaml export), кастомный handler не понадобился. Сервис —
+  `catalog.GetArtifactContent` (чтение записи из repository/artifacts,
+  проверка пути внутри run_dir, чтение файла — всё в service-слое);
+  repository/artifacts += `GetArtifactByID`; cstmerrors += `ErrTooLarge`.
+- Тесты: runsapi (событие в tx, live-доставка через Hub, replay, дедупликация
+  по ключу), controller/http (200/404/traversal/missing file/413).
+- Проверка: `go build/vet/test -race` зелёные, `make gen` идемпотентен.

@@ -44,6 +44,8 @@ type stageProc struct {
 	events     []harness.Event // для ExtractSessionID (ограниченный буфер)
 	lastEvent  atomic.Int64    // unixnano последнего события стрима
 	retriable  atomic.Int64    // подряд идущие retriable-ошибки
+	tokensIn   atomic.Int64    // накопление usage-СОБЫТИЙ (T-24: дельты)
+	tokensOut  atomic.Int64
 	result     chan stageResult
 	killOnce   atomic.Bool
 	completion chan stageResult
@@ -84,7 +86,13 @@ func (s *Supervisor) spawnStage(ctx context.Context, run *dtorep.Run, stage *dto
 	}
 
 	// session id предыдущей попытки (resume, D-16)
-	lc := LaunchContext{Run: run, Stage: stage, StageSpec: stageSpec, IsResume: stage.ResumeCount > 0}
+	lc := LaunchContext{
+		Run: run, Stage: stage, StageSpec: stageSpec, IsResume: stage.ResumeCount > 0,
+		RunDir: s.runDir(run.ID), ProjectPath: project.Path,
+	}
+	if fullSpec, err := s.specFor(ctx, run.ID); err == nil && fullSpec.Loop != nil {
+		lc.MaxIterations = fullSpec.Loop.MaxIters
+	}
 	// queue notes + steer-сообщения — в промпт ближайшей попытки (D-22)
 	messages, err := s.consumeNotes(ctx, run.ID)
 	if err != nil {
@@ -101,6 +109,11 @@ func (s *Supervisor) spawnStage(ctx context.Context, run *dtorep.Run, stage *dto
 	prompt, err := s.prompt(ctx, lc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build prompt: %w", err)
+	}
+
+	// T-17: промпт попытки сохраняется артефактом рана (prompt-<stage>-<iter>.md)
+	if err := s.savePromptArtifact(ctx, run, stage, lc.RunDir, prompt); err != nil {
+		logError(ctx, "failed to save prompt artifact", err)
 	}
 
 	launchSpec := harness.LaunchSpec{
@@ -126,7 +139,7 @@ func (s *Supervisor) spawnStage(ctx context.Context, run *dtorep.Run, stage *dto
 	}
 
 	// лог попытки (receipts, D-13)
-	logPath := filepath.Join(s.cfg.RunsDir, run.ID,
+	logPath := filepath.Join(s.GetConfig().RunsDir, run.ID,
 		fmt.Sprintf("stage-%s-%d.log", stage.StageKey, stage.Iteration))
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create run log dir: %w", err)
@@ -239,6 +252,13 @@ func (p *stageProc) trackEvent(ev harness.Event) {
 		p.retriable.Store(0)
 	}
 
+	// D-51: накопление usage-событий (попытка = один процесс; opencode
+	// шлёт step_finish на шаг, у остальных — один result на попытку)
+	if ev.Usage != nil {
+		p.tokensIn.Add(ev.Usage.Input)
+		p.tokensOut.Add(ev.Usage.Output)
+	}
+
 	p.batcher.Append(harness.JournalKind(ev), []byte(streamPayload(ev)))
 }
 
@@ -318,13 +338,11 @@ func (p *stageProc) wait() stageResult {
 		}
 	}
 
-	// последний usage из стрима (nullable — не все harness'ы сообщают)
+	// агрегированный usage попытки (T-24): сумма usage-событий стрима;
+	// 0/0 и отсутствие событий → nil (метрики «—», не выдумываем)
 	var usage *harness.Usage
-	for i := len(p.events) - 1; i >= 0; i-- {
-		if p.events[i].Usage != nil {
-			usage = p.events[i].Usage
-			break
-		}
+	if in, out := p.tokensIn.Load(), p.tokensOut.Load(); in > 0 || out > 0 {
+		usage = &harness.Usage{Input: in, Output: out}
 	}
 
 	_ = p.batcher.Close(context.Background())
@@ -333,4 +351,26 @@ func (p *stageProc) wait() stageResult {
 	res := stageResult{exitCode: exitCode, usage: usage}
 	p.completion <- res // сигнал watchdog'у завершиться
 	return res
+}
+
+// savePromptArtifact пишет промпт попытки в RunDir и регистрирует артефакт
+// в БД (виден на вкладке «Промпт»/«Артефакты» UI, T-14).
+func (s *Supervisor) savePromptArtifact(ctx context.Context, run *dtorep.Run, stage *dtorep.Stage, runDir, prompt string) error {
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create run dir: %w", err)
+	}
+	name := fmt.Sprintf("prompt-%s-%d.md", stage.StageKey, stage.Iteration)
+	path := filepath.Join(runDir, name)
+	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
+		return fmt.Errorf("failed to write prompt file: %w", err)
+	}
+	if _, err := s.artifacts.CreateArtifact(ctx, dtorep.CreateArtifactRequest{
+		RunID:   run.ID,
+		StageID: &stage.ID,
+		Path:    path,
+		Kind:    "prompt",
+	}); err != nil {
+		return fmt.Errorf("failed to register prompt artifact: %w", err)
+	}
+	return nil
 }

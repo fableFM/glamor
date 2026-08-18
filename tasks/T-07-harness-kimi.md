@@ -70,3 +70,11 @@ raw без паники, usage НЕ изобретается), ExtractSessionID 
 синтезированы по матрице (kimi 0.36.0, реальный CLI не запускался).
 Проверка: 21 юнит-тест зелёный с -race, lint 0 issues.
 Осталось на e2e (build tag): проверка против реального CLI.
+
+### Дополнение 2026-08-17 (fix-task-2, П.9): каркас e2e
+
+Написан `backend/internal/harness/kimi/kimi_e2e_test.go` (build tag
+`e2e`): skip при отсутствии бинаря в PATH / credentials / session_id в
+стриме; сценарий — простой промпт → парсинг событий → ExtractSessionID →
+resume с новым промптом. Прогон на машине с kimi в PATH прошёл живьём.
+Полноценный e2e пайплайна (этап + артефакт) — T-17.

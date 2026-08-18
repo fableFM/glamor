@@ -186,6 +186,14 @@ invariants/forbidden_patterns с привязкой к источнику, edge-
     координирует service, отдельный usecase-слой для локального демона —
     избыточная церемония). Операционная форма правил и запретов —
     project-скилл `.agents/skills/glamor-architecture`.)*
+    *(уточнено 2026-08-17, fix-task-2 F-09: доменный пакет
+    (`internal/notify/telegram`, `internal/daemon`, `internal/gitx`) МОЖЕТ
+    владеть репозиторием собственного состояния (`repository/telegram`),
+    но бизнес-чтения и мутации чужих доменов (runs/stages/gates/projects/…)
+    делает только через service (`catalog` — чтения/агрегации, `runsapi` —
+    действия). Причина: TG-адаптер читал runs/stages/gates/projects
+    напрямую — незафиксированный прецедент «доменам можно всё»; read-
+    агрегация /status перенесена в `catalog.ListActiveRunsStatus`.)*
   - **DTO между слоями**: `internal/dto/{dtoctrl,dtosvc,dtorep}` —
     данные, пересекающие границы слоёв, не утекают чужими типами; модели
     репозитория неэкспортируемы, маппинг — `mappers.go` в каждом слое.

@@ -22,5 +22,9 @@ func mapRunToDTO(r run) dtorep.Run {
 		t := r.finishedAt.Time
 		out.FinishedAt = &t
 	}
+	if r.tgRootMessageID.Valid {
+		id := r.tgRootMessageID.Int64
+		out.TgRootMessageID = &id
+	}
 	return out
 }

@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"sess-retry-1","model":"claude-sonnet-4-5","cwd":"/tmp/proj","permissionMode":"bypassPermissions","claude_code_version":"2.1.81"}
+{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":1000,"error_status":529,"error":"overloaded"}
+{"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"retry_delay_ms":2000,"error_status":529,"error":"overloaded"}
+{"type":"system","subtype":"api_retry","attempt":3,"max_retries":10,"retry_delay_ms":4000,"error_status":500,"error":"server_error"}
+{"type":"result","subtype":"error","is_error":true,"session_id":"sess-retry-1","result":"API Error: 529 provider overloaded","total_cost_usd":0,"duration_ms":9000}

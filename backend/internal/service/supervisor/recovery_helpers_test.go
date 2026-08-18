@@ -14,6 +14,7 @@ import (
 	"github.com/fableFM/glamor/internal/events"
 	"github.com/fableFM/glamor/internal/harness"
 	"github.com/fableFM/glamor/internal/repository"
+	artifactsrep "github.com/fableFM/glamor/internal/repository/artifacts"
 	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
@@ -107,7 +108,7 @@ func (f *restartFixture) startSupervisor(t *testing.T) (context.CancelFunc, chan
 	sup := supervisor.New(f.machine, f.registry, f.journal, f.cfg, nil,
 		f.runs, f.stages,
 		projectsrep.NewRepository(f.db), pipelinesrep.NewRepository(f.db),
-		notesrep.NewRepository(f.db))
+		notesrep.NewRepository(f.db), artifactsrep.NewRepository(f.db), gatesrep.NewRepository(f.db))
 
 	lastSupMu.Lock()
 	lastSup = sup

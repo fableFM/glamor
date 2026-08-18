@@ -37,6 +37,8 @@ const (
 	GateKindQuestion     GateKind = "question"
 	GateKindEscalation   GateKind = "escalation"
 	GateKindFinalReview  GateKind = "final_review"
+	// GateKindLessonReview — гейт «Сохранить урок?» (D-52, T-29).
+	GateKindLessonReview GateKind = "lesson_review"
 )
 
 // GateState — состояние гейта (ADR-001).
@@ -57,7 +59,9 @@ type Project struct {
 	Name          string
 	DefaultBranch string
 	IDECommand    string
-	CreatedAt     time.Time
+	// NotifyTgDefault — дефолт notify_tg для новых ранов проекта (T-16, F-04).
+	NotifyTgDefault bool
+	CreatedAt       time.Time
 }
 
 type CreateProjectRequest struct {
@@ -101,6 +105,9 @@ type Run struct {
 	IdempotencyKey    string
 	CreatedAt         time.Time
 	FinishedAt        *time.Time
+	// TgRootMessageID — id корневого TG-сообщения «треда» рана (T-19);
+	// nil — уведомлений по рану ещё не отправляли.
+	TgRootMessageID *int64
 }
 
 type CreateRunRequest struct {
@@ -121,7 +128,8 @@ type ListRunsRequest struct {
 	ProjectID         *int64
 	PipelineVersionID *int64
 	States            []RunState
-	Limit             int // 0 = без лимита
+	Since             *time.Time // created_at >= Since (метрики за период, T-24)
+	Limit             int        // 0 = без лимита
 }
 
 // Stage — попытка выполнения этапа. Каждая попытка — отдельная строка
@@ -226,8 +234,9 @@ type CreateArtifactRequest struct {
 
 // PatchProjectRequest — частичное обновление проекта (nil = не трогаем).
 type PatchProjectRequest struct {
-	DefaultBranch *string
-	IDECommand    *string
+	DefaultBranch   *string
+	IDECommand      *string
+	NotifyTgDefault *bool
 }
 
 // NoteKind — вид заметки (D-22).
@@ -259,4 +268,37 @@ type CreateNoteRequest struct {
 	Kind           NoteKind
 	Text           string
 	IdempotencyKey string
+}
+
+// TgGateMessage — маппинг гейта на TG-сообщение (T-19): reply на это
+// сообщение трактуется как ответ на гейт.
+type TgGateMessage struct {
+	GateID    string
+	ChatID    int64
+	MessageID int64
+}
+
+// VendorSearchHit — выдержка из vendor-памяти по FTS-запросу (T-23).
+type VendorSearchHit struct {
+	Path    string // относительный путь файла памяти (vendor.md)
+	Snippet string // релевантный фрагмент (FTS5 snippet)
+	Rank    float64
+}
+
+// Lesson — карточка урока (D-52, T-29): метаданные в БД, содержимое —
+// markdown-файл (двухуровнево, как vendor-память).
+type Lesson struct {
+	ID           string
+	Title        string
+	Scope        string // global | project
+	Status       string // proposed | confirmed | rejected | superseded
+	ProjectID    *int64
+	Path         string
+	TriggersJSON string
+	RunID        *string
+	StageKey     string
+	AppliedCount int64
+	RelapseCount int64
+	CreatedAt    time.Time
+	UpdatedAt    *time.Time
 }

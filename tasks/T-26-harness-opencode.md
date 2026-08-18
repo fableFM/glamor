@@ -1,6 +1,6 @@
 # T-26 Адаптер opencode
 
-Статус: todo · M3 · зависимости: T-06, research/harness-capability-matrix.md
+Статус: done (2026-08-17) · M3 · зависимости: T-06, research/harness-capability-matrix.md
 
 ## Цель
 
@@ -36,3 +36,13 @@
 
 - opencode: пайплайн M1 проходит на нём (хотя бы planner/reviewer роли).
 - Реестр harness'ов в UI показывает все пять с честными capability badges.
+
+## Итог (2026-08-17, субагент; проверено)
+
+- opencode: `run [-s id] [-m] [--variant] <prompt> --format json --auto`;
+  text→text_delta (гранулярность UNVERIFIED); tool_use только completed →
+  пара start+result (start=end); step_finish → usage (баг #26855: может
+  не прийти — задокументировано, export-fallback вне M1); нет модели в
+  событиях (#40544). Зарегистрирован в main. Реестр UI показывает все 5
+  harness'ов через /version harnesses (badges — фронт по Capabilities).
+- Золотые файлы по матрице (1.2.27, CLI не запускался); e2e-каркас под тегом.

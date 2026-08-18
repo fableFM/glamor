@@ -37,6 +37,13 @@ type Config struct {
 		Level string `yaml:"level" validate:"required,oneof=debug info warn error"`
 	} `yaml:"log"`
 
+	// Telegram — TG-адаптер (T-19, D-70): нотификации и пульт в Telegram.
+	// Токен никогда не логируется и не уходит в API-ответы.
+	Telegram struct {
+		Enabled bool   `yaml:"enabled"`
+		Token   string `yaml:"token"`
+	} `yaml:"telegram"`
+
 	// Harnesses — переопределение путей бинарей: имя → путь (T-06).
 	Harnesses map[string]string `yaml:"harnesses"`
 
@@ -119,6 +126,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GLAMOR_LOG_LEVEL"); v != "" {
 		cfg.Log.Level = strings.ToLower(v)
+	}
+	if v := os.Getenv("GLAMOR_TELEGRAM_TOKEN"); v != "" {
+		cfg.Telegram.Token = v
+	}
+	if v := os.Getenv("GLAMOR_TELEGRAM_ENABLED"); v != "" {
+		cfg.Telegram.Enabled = strings.EqualFold(v, "true") || v == "1"
 	}
 }
 

@@ -16,11 +16,13 @@ servers:
         description: динамический порт демона (D-08), см. ~/.glamor/daemon.json
 tags:
   - name: system
+  - name: memory
   - name: projects
   - name: pipelines
   - name: runs
   - name: gates
   - name: events
+  - name: telegram
 paths:
   /healthz:
     get:
@@ -89,6 +91,24 @@ paths:
         default:
           $ref: "#/components/responses/Error"
   /projects/{id}:
+    delete:
+      tags: [projects]
+      operationId: deleteProject
+      summary: Удалить проект КАСКАДНО (раны, стадии, события, гейты, заметки)
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: удалён
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        default:
+          $ref: "#/components/responses/Error"
     get:
       tags: [projects]
       operationId: getProject
@@ -157,6 +177,127 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PipelineDetail"
+        default:
+          $ref: "#/components/responses/Error"
+  /pipelines:
+    post:
+      tags: [pipelines]
+      operationId: createPipeline
+      summary: Создать пайплайн (первая версия)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePipelineRequest"
+      responses:
+        "201":
+          description: создан (версия 1)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pipeline"
+        default:
+          $ref: "#/components/responses/Error"
+  /pipelines/import:
+    post:
+      tags: [pipelines]
+      operationId: importPipeline
+      summary: Импорт пайплайна из YAML (T-21)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportPipelineRequest"
+      responses:
+        "201":
+          description: импортирован (новый пайплайн или новая версия)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pipeline"
+        default:
+          $ref: "#/components/responses/Error"
+  /pipelines/{id}/versions:
+    get:
+      tags: [pipelines]
+      operationId: listPipelineVersions
+      summary: Все версии пайплайна
+      parameters:
+        - $ref: "#/components/parameters/PipelineId"
+      responses:
+        "200":
+          description: версии (desc)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Pipeline"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [pipelines]
+      operationId: createPipelineVersion
+      summary: Новая версия пайплайна (правка = новая версия, T-21)
+      parameters:
+        - $ref: "#/components/parameters/PipelineId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePipelineVersionRequest"
+      responses:
+        "201":
+          description: создана версия N+1 с parent_version_id=id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pipeline"
+        default:
+          $ref: "#/components/responses/Error"
+  /pipeline-versions/{vid}:
+    get:
+      tags: [pipelines]
+      operationId: getPipelineVersion
+      summary: Конкретная версия пайплайна
+      parameters:
+        - name: vid
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: версия
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pipeline"
+        default:
+          $ref: "#/components/responses/Error"
+  /pipeline-versions/{vid}/export:
+    get:
+      tags: [pipelines]
+      operationId: exportPipelineVersion
+      summary: Экспорт версии в YAML (T-21)
+      parameters:
+        - name: vid
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: YAML пайплайна (стабильный порядок ключей)
+          content:
+            text/yaml:
+              schema:
+                type: string
         default:
           $ref: "#/components/responses/Error"
   /runs:
@@ -324,6 +465,92 @@ paths:
                   $ref: "#/components/schemas/Event"
         default:
           $ref: "#/components/responses/Error"
+  /runs/{id}/artifacts/{artifactId}/content:
+    get:
+      tags: [runs]
+      operationId: getArtifactContent
+      summary: |
+        Содержимое файла артефакта (F-02, fix-task-4). Путь читается только
+        из записи БД и обязан оставаться внутри каталога рана (run_dir);
+        чужой/несуществующий артефакт, выход за run_dir и отсутствующий файл
+        → 404. Файл больше cap'а (5 МБ) → 413 (фронт предлагает скачать).
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: artifactId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: содержимое файла (UTF-8)
+          content:
+            text/plain:
+              schema:
+                type: string
+        "413":
+          description: файл больше cap'а (5 МБ)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs/{id}/metrics:
+    get:
+      tags: [runs]
+      operationId: getRunMetrics
+      summary: Метрики рана per stage + итоги (D-51, T-24)
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: метрики
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RunMetrics"
+        default:
+          $ref: "#/components/responses/Error"
+  /runs/{id}/metrics.csv:
+    get:
+      tags: [runs]
+      operationId: getRunMetricsCsv
+      summary: Экспорт метрик рана в CSV (T-24)
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: CSV по попыткам этапов
+          content:
+            text/csv:
+              schema:
+                type: string
+        default:
+          $ref: "#/components/responses/Error"
+  /projects/{id}/metrics:
+    get:
+      tags: [projects]
+      operationId: getProjectMetrics
+      summary: Агрегированные метрики проекта за период (T-24)
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [24h, 7d, 30d, all]
+            default: 7d
+      responses:
+        "200":
+          description: метрики проекта
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectMetrics"
+        default:
+          $ref: "#/components/responses/Error"
   /gates/{id}/resolve:
     post:
       tags: [gates]
@@ -367,6 +594,293 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Stage"
+        default:
+          $ref: "#/components/responses/Error"
+  /telegram/pair:
+    post:
+      tags: [telegram]
+      operationId: pairTelegram
+      summary: Привязка TG-чата по коду из /start (T-19)
+      description: |
+        Пользователь отправляет боту /start → бот показывает 6-значный код →
+        код вводится в UI → chat_id попадает в whitelist (tg_chats).
+        Код одноразовый: успешная привязка его погашает.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairTelegramRequest"
+      responses:
+        "200":
+          description: чат привязан
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairTelegramResponse"
+        default:
+          $ref: "#/components/responses/Error"
+  /settings:
+    get:
+      tags: [system]
+      operationId: getSettings
+      summary: Настройки демона (экран настроек UI)
+      responses:
+        "200":
+          description: настройки (секреты замаскированы)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Settings"
+  /settings/telegram:
+    put:
+      tags: [system]
+      operationId: putTelegramSettings
+      summary: Настройки TG-бота (токен валидируется через getMe, hot-apply адаптера)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramSettingsPut"
+      responses:
+        "200":
+          description: сохранено и применено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelegramSettings"
+        default:
+          $ref: "#/components/responses/Error"
+  /settings/supervisor:
+    put:
+      tags: [system]
+      operationId: putSupervisorSettings
+      summary: Параметры supervisor (watchdog, пул процессов; hot-apply)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupervisorSettingsPut"
+      responses:
+        "200":
+          description: сохранено и применено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupervisorSettings"
+        default:
+          $ref: "#/components/responses/Error"
+  /fs/browse:
+    get:
+      tags: [system]
+      operationId: fsBrowse
+      summary: Листинг подкаталогов (выбор папки проекта в браузерном UI, T-16)
+      parameters:
+        - name: path
+          in: query
+          schema:
+            type: string
+          description: абсолютный путь; пусто = домашний каталог
+      responses:
+        "200":
+          description: подкаталоги
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FsBrowseResult"
+        default:
+          $ref: "#/components/responses/Error"
+  /lessons:
+    get:
+      tags: [memory]
+      operationId: listLessons
+      summary: Список уроков (D-52, T-29)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [proposed, confirmed, rejected, superseded]
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [global, project]
+        - name: project_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: уроки
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Lesson"
+        default:
+          $ref: "#/components/responses/Error"
+  /lessons/{id}:
+    get:
+      tags: [memory]
+      operationId: getLesson
+      summary: Урок с содержимым файла
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: урок
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LessonDetail"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      tags: [memory]
+      operationId: patchLesson
+      summary: Смена статуса урока (confirm/reject из UI)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [proposed, confirmed, rejected, superseded]
+      responses:
+        "200":
+          description: обновлён
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lesson"
+        default:
+          $ref: "#/components/responses/Error"
+  /memory/tree:
+    get:
+      tags: [memory]
+      operationId: memoryTree
+      summary: Дерево vendor-памяти (глобальная + по проектам), T-23
+      responses:
+        "200":
+          description: дерево памяти
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryTree"
+        default:
+          $ref: "#/components/responses/Error"
+  /memory/file:
+    get:
+      tags: [memory]
+      operationId: memoryReadFile
+      summary: Содержимое файла памяти
+      parameters:
+        - name: scope
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [global, project]
+        - name: vendor
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: содержимое
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryFileContent"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      tags: [memory]
+      operationId: memoryWriteFile
+      summary: Ручная правка файла памяти (T-23)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryWriteFileRequest"
+      responses:
+        "200":
+          description: сохранено (+ git commit для глобальной)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryFileContent"
+        default:
+          $ref: "#/components/responses/Error"
+  /memory/history:
+    get:
+      tags: [memory]
+      operationId: memoryHistory
+      summary: История изменений файла глобальной памяти (git log)
+      parameters:
+        - name: vendor
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: история
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MemoryHistoryEntry"
+        default:
+          $ref: "#/components/responses/Error"
+  /memory/promote:
+    post:
+      tags: [memory]
+      operationId: memoryPromote
+      summary: Промоушн записи локальной памяти в глобальную (T-23)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryPromoteRequest"
+      responses:
+        "200":
+          description: продвинуто
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path:
+                    type: string
         default:
           $ref: "#/components/responses/Error"
   /ws:
@@ -466,6 +980,9 @@ components:
         details:
           type: object
           additionalProperties: true
+          description: |
+            контекст ошибки: dirty_checkout → {files: string[]};
+            run_locked → {branch: string, run_id: string} (F-02)
     VersionInfo:
       type: object
       required: [version]
@@ -492,6 +1009,10 @@ components:
           type: string
         ide_command:
           type: string
+        notify_tg_default:
+          type: boolean
+          default: true
+          description: дефолт notify_tg для новых ранов проекта (T-16)
         created_at:
           type: string
           format: date-time
@@ -514,6 +1035,8 @@ components:
           type: string
         ide_command:
           type: string
+        notify_tg_default:
+          type: boolean
     ProjectDetail:
       allOf:
         - $ref: "#/components/schemas/Project"
@@ -563,6 +1086,292 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Pipeline"
+    StageMetrics:
+      type: object
+      required: [stage_id, stage_key, iteration, state, tokens_in, tokens_out, resume_count]
+      properties:
+        stage_id:
+          type: integer
+          format: int64
+        stage_key:
+          type: string
+        iteration:
+          type: integer
+          format: int64
+        state:
+          $ref: "#/components/schemas/StageState"
+        tokens_in:
+          type: integer
+          format: int64
+          description: 0 = harness не сообщил usage (показывать «—»)
+        tokens_out:
+          type: integer
+          format: int64
+        duration_sec:
+          type: number
+          description: finished_at - started_at; null если не завершена
+          nullable: true
+        resume_count:
+          type: integer
+          format: int64
+        exit_code:
+          type: integer
+          format: int64
+          nullable: true
+    RunMetrics:
+      type: object
+      required: [run_id, stages, totals, gate_wait_seconds]
+      properties:
+        run_id:
+          type: string
+        stages:
+          type: array
+          items:
+            $ref: "#/components/schemas/StageMetrics"
+        totals:
+          type: object
+          required: [tokens_in, tokens_out, stages_count]
+          properties:
+            tokens_in:
+              type: integer
+              format: int64
+            tokens_out:
+              type: integer
+              format: int64
+            duration_sec:
+              type: number
+              nullable: true
+            stages_count:
+              type: integer
+        gate_wait_seconds:
+          type: number
+          description: суммарное ожидание гейтов (производное событий, не хранится)
+    ProjectMetrics:
+      type: object
+      required: [project_id, period, runs_total, tokens_in, tokens_out, by_state]
+      properties:
+        project_id:
+          type: integer
+          format: int64
+        period:
+          type: string
+        runs_total:
+          type: integer
+        tokens_in:
+          type: integer
+          format: int64
+        tokens_out:
+          type: integer
+          format: int64
+        total_duration_sec:
+          type: number
+        by_state:
+          type: object
+          additionalProperties:
+            type: integer
+          description: число ранов по состояниям
+    Settings:
+      type: object
+      required: [telegram, supervisor]
+      properties:
+        telegram:
+          $ref: "#/components/schemas/TelegramSettings"
+        supervisor:
+          $ref: "#/components/schemas/SupervisorSettings"
+    TelegramSettings:
+      type: object
+      required: [enabled, has_token]
+      properties:
+        enabled:
+          type: boolean
+        has_token:
+          type: boolean
+        token_masked:
+          type: string
+          description: первые/последние символы, полный токен не отдаётся
+        bot_username:
+          type: string
+          nullable: true
+          description: из getMe при валидном токене
+    TelegramSettingsPut:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        token:
+          type: string
+          description: пусто = оставить текущий; валидация через getMe
+    SupervisorSettings:
+      type: object
+      required: [stall_timeout_sec, stage_timeout_min, max_parallel, max_auto_resumes]
+      properties:
+        stall_timeout_sec:
+          type: integer
+        stage_timeout_min:
+          type: integer
+        max_parallel:
+          type: integer
+        max_auto_resumes:
+          type: integer
+          format: int64
+    SupervisorSettingsPut:
+      type: object
+      properties:
+        stall_timeout_sec:
+          type: integer
+        stage_timeout_min:
+          type: integer
+        max_parallel:
+          type: integer
+        max_auto_resumes:
+          type: integer
+          format: int64
+    FsBrowseResult:
+      type: object
+      required: [path, dirs]
+      properties:
+        path:
+          type: string
+        parent:
+          type: string
+          nullable: true
+        dirs:
+          type: array
+          items:
+            type: object
+            required: [name, path, is_git_repo]
+            properties:
+              name:
+                type: string
+              path:
+                type: string
+              is_git_repo:
+                type: boolean
+                description: есть .git — подсказка «это проект»
+    Lesson:
+      type: object
+      required: [id, title, scope, status, path, created_at]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        scope:
+          type: string
+          enum: [global, project]
+        status:
+          type: string
+          enum: [proposed, confirmed, rejected, superseded]
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+        path:
+          type: string
+        run_id:
+          type: string
+          nullable: true
+        stage_key:
+          type: string
+        applied_count:
+          type: integer
+          format: int64
+        relapse_count:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+    LessonDetail:
+      allOf:
+        - $ref: "#/components/schemas/Lesson"
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: string
+    MemoryFileEntry:
+      type: object
+      required: [path, vendor, size, updated_at]
+      properties:
+        path:
+          type: string
+        vendor:
+          type: string
+        size:
+          type: integer
+          format: int64
+        updated_at:
+          type: string
+          format: date-time
+    MemoryTree:
+      type: object
+      required: [global, projects]
+      properties:
+        global:
+          type: array
+          items:
+            $ref: "#/components/schemas/MemoryFileEntry"
+        projects:
+          type: array
+          items:
+            type: object
+            required: [project_id, project_name, files]
+            properties:
+              project_id:
+                type: integer
+                format: int64
+              project_name:
+                type: string
+              files:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MemoryFileEntry"
+    MemoryFileContent:
+      type: object
+      required: [vendor, scope, content]
+      properties:
+        vendor:
+          type: string
+        scope:
+          type: string
+        content:
+          type: string
+    MemoryWriteFileRequest:
+      type: object
+      required: [scope, vendor, content]
+      properties:
+        scope:
+          type: string
+          enum: [global, project]
+        vendor:
+          type: string
+        content:
+          type: string
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+    MemoryHistoryEntry:
+      type: object
+      required: [hash, date, message]
+      properties:
+        hash:
+          type: string
+        date:
+          type: string
+        message:
+          type: string
+    MemoryPromoteRequest:
+      type: object
+      required: [vendor, project_id]
+      properties:
+        vendor:
+          type: string
+        project_id:
+          type: integer
+          format: int64
     RunState:
       type: string
       enum: [draft, running, waiting_gate, succeeded, failed, stopped]
@@ -571,7 +1380,7 @@ components:
       enum: [pending, running, succeeded, failed, interrupted, skipped]
     GateKind:
       type: string
-      enum: [plan_approval, question, escalation, final_review]
+      enum: [plan_approval, question, escalation, final_review, lesson_review]
     GateState:
       type: string
       enum: [open, answered, approved, rejected, expired]
@@ -608,6 +1417,39 @@ components:
           type: string
           format: date-time
           nullable: true
+    CreatePipelineRequest:
+      type: object
+      required: [name, spec_json]
+      properties:
+        name:
+          type: string
+        project_id:
+          type: integer
+          format: int64
+          nullable: true
+          description: NULL = глобальный пайплайн
+        spec_json:
+          type: string
+    CreatePipelineVersionRequest:
+      type: object
+      required: [spec_json]
+      properties:
+        spec_json:
+          type: string
+    ImportPipelineRequest:
+      type: object
+      required: [yaml]
+      properties:
+        yaml:
+          type: string
+          description: пайплайн в YAML-формате T-21
+        on_conflict:
+          type: string
+          enum: [new, version, fail]
+          default: new
+          description: |
+            new — всегда новый пайплайн; version — новая версия
+            существующего по имени; fail — ошибка при совпадении имени
     CreateRunRequest:
       type: object
       required: [project_id, pipeline_version_id, task_text]
@@ -840,9 +1682,25 @@ components:
           $ref: "#/components/schemas/EventKind"
         payload:
           $ref: "#/components/schemas/EventPayload"
+    PairTelegramRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: 6-значный код, выданный ботом на /start
+    PairTelegramResponse:
+      type: object
+      required: [chat_id]
+      properties:
+        chat_id:
+          type: integer
+          format: int64
+          description: привязанный чат (добавлен в whitelist)
     EventKind:
       type: string
       enum:
+        - run.created
         - run.state_changed
         - run.branch_mismatch
         - stage.state_changed
@@ -863,6 +1721,7 @@ components:
       type: object
       description: |
         Полиморфный payload события (детерминирован kind'ом события):
+        - run.created → RunCreatedPayload
         - run.state_changed / stage.state_changed → StateChangedPayload
         - gate.opened / gate.resolved → GatePayload
         - stream.thinking / stream.text / stream.raw → StreamTextPayload
@@ -870,6 +1729,39 @@ components:
         - stream.usage → StreamUsagePayload
         - stream.error → StreamErrorPayload
       additionalProperties: true
+    RunCreatedPayload:
+      type: object
+      description: |
+        run.created (F-01, fix-task-4) — сериализованный объект рана в момент
+        создания (состояние draft); поля совпадают со схемой Run. Пишется в
+        той же транзакции, что и создание рана (D-11); повтор по
+        Idempotency-Key второго события не порождает (D-12).
+      required: [id, project_id, pipeline_version_id, task_text, branch, state, created_at]
+      properties:
+        id:
+          type: string
+        project_id:
+          type: integer
+          format: int64
+        pipeline_version_id:
+          type: integer
+          format: int64
+        task_text:
+          type: string
+        base_branch:
+          type: string
+        branch:
+          type: string
+        state:
+          $ref: "#/components/schemas/RunState"
+        depth:
+          type: integer
+          format: int64
+        notify_tg:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
     StateChangedPayload:
       type: object
       required: [to]

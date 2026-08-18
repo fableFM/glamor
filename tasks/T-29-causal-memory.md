@@ -1,6 +1,6 @@
 # T-29 Причинно-следственная память (Lessons)
 
-Статус: todo · M3 · зависимости: T-11 (гейты), T-23 (vendor-память, FTS5)
+Статус: done (2026-08-17) · M3 · зависимости: T-11 (гейты), T-23 (vendor-память, FTS5)
 
 ## Цель
 
@@ -99,3 +99,33 @@ applied_count: 0 · last_applied: null · relapse_count: 0
   история.
 - Отклонённый урок не предлагается повторно в том же виде (dedup по
   триггерам).
+
+## Итог (2026-08-17)
+
+Сделано:
+- Миграция 20260817140000: таблица `lessons` (статусы/счётчики applied/
+  relapse/триггеры/scope) + gates CHECK расширен kind=lesson_review
+  (пересоздание таблицы, SQLite).
+- Модель: карточка markdown с frontmatter (id/title/triggers/created) +
+  секции Ситуация/Симптом/Причина/Правило; файлы двухуровнево
+  (~/.glamor/lessons/ + <repo>/.glamor/lessons/), метаданные в БД.
+- Захват сигналов (детерминированно): supervisor.lessonSignals — ответы
+  на гейтах + заметки рана → плейсхолдер {{gate_answers}} промпта
+  distill-этапа. Distill — линейный llm-этап дефолтного пайплайна
+  (effort low, артефакт lessons.md, prompts/distill.md), {{rejected_lessons}}
+  для dedup-подсказки.
+- Гейт lesson_review (gate_after у distill, открывается только при
+  наличии карточек — NO_LESSONS не донимает): approve → project,
+  comment → global, answer → project + ответ в «Причину», reject →
+  rejected (dedup: повторно не предлагается). Резолв-эффекты —
+  lessons.GateFinalizer, подключён в runsapi (без ре-входа этапа).
+- Инъекция: {{lessons}} в planner.md — confirmed-уроки по FTS (общий
+  vendor_index), top-K с токен-бюджетом ~2k, applied_count++.
+- Парсер карточек ручной (RE2 без lookahead), устойчив к мусору LLM.
+- Relapse-автодетекция (reviewer нашёл то же правило) — отложена:
+  счётчик в схеме есть, эвристика связывания finding↔lesson — за рамками
+  M3 (задокументировано).
+- UI «Память → Уроки» — в брифе UI-агента (этот батч).
+
+Проверка: ParseCards (валидные/мусор), инъекция в промпт + applied_count++,
+reject-dedup, гейт-флоу approve/reject. Всё с -race зелёное, lint 0.

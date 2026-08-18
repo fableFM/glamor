@@ -19,7 +19,8 @@ export const useRunsStore = create<RunsState>((set) => ({
   applyStateChanged: (runId, to) =>
     set((state) => {
       const run = state.byId[runId]
-      // неизвестный ран — не создаём из события, его подтянет REST-снапшот
+      // неизвестный ран — не создаём из события: карточку догоняет ensureRunKnown
+      // в lib/dispatch (getRun + upsert), а само событие применится реплеем после fetch
       if (!run) return state
       return { byId: { ...state.byId, [runId]: { ...run, state: to as Run['state'] } } }
     }),

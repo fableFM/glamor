@@ -96,7 +96,7 @@ function isDetails(value: unknown): value is Record<string, unknown> {
 export type QueryParams = Record<string, string | number | boolean | undefined>
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   query?: QueryParams
   body?: unknown
   idempotencyKey?: string
@@ -189,8 +189,73 @@ export function listProjectPipelines(id: number): Promise<OkResponse<'listProjec
   return request<OkResponse<'listProjectPipelines'>>(`/projects/${id}/pipelines`)
 }
 
+export type CreatePipelineRequest = components['schemas']['CreatePipelineRequest']
+export type CreatePipelineVersionRequest = components['schemas']['CreatePipelineVersionRequest']
+export type ImportPipelineRequest = components['schemas']['ImportPipelineRequest']
+
 export function getPipeline(id: number): Promise<OkResponse<'getPipeline'>> {
   return request<OkResponse<'getPipeline'>>(`/pipelines/${id}`)
+}
+
+export function createPipeline(body: CreatePipelineRequest): Promise<CreatedResponse<'createPipeline'>> {
+  return request<CreatedResponse<'createPipeline'>>('/pipelines', { method: 'POST', body })
+}
+
+export function importPipeline(body: ImportPipelineRequest): Promise<CreatedResponse<'importPipeline'>> {
+  return request<CreatedResponse<'importPipeline'>>('/pipelines/import', { method: 'POST', body })
+}
+
+export function listPipelineVersions(id: number): Promise<OkResponse<'listPipelineVersions'>> {
+  return request<OkResponse<'listPipelineVersions'>>(`/pipelines/${id}/versions`)
+}
+
+export function createPipelineVersion(
+  id: number,
+  body: CreatePipelineVersionRequest,
+): Promise<CreatedResponse<'createPipelineVersion'>> {
+  return request<CreatedResponse<'createPipelineVersion'>>(`/pipelines/${id}/versions`, {
+    method: 'POST',
+    body,
+  })
+}
+
+export function getPipelineVersion(vid: number): Promise<OkResponse<'getPipelineVersion'>> {
+  return request<OkResponse<'getPipelineVersion'>>(`/pipeline-versions/${vid}`)
+}
+
+/** Текстовый GET (text/yaml, text/csv): тело не парсим, ошибки — в едином JSON-формате. */
+async function requestText(path: string): Promise<string> {
+  const url = new URL(apiBaseUrl() + path)
+  const headers = new Headers()
+  const token = apiToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  let response: Response
+  try {
+    response = await fetch(url, { headers })
+  } catch (cause) {
+    throw new ApiError(0, 'daemon_unreachable', 'демон недоступен', {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    })
+  }
+  const text = await response.text()
+  if (!response.ok) {
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (isErrorBody(parsed)) {
+        throw new ApiError(response.status, parsed.code, parsed.message, isDetails(parsed.details) ? parsed.details : undefined)
+      }
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+    }
+    throw new ApiError(response.status, 'internal', `HTTP ${response.status}`)
+  }
+  return text
+}
+
+/** Экспорт версии пайплайна — text/yaml. */
+export function exportPipelineVersion(vid: number): Promise<string> {
+  return requestText(`/pipeline-versions/${vid}/export`)
 }
 
 type ListRunsQuery = NonNullable<operations['listRuns']['parameters']['query']>
@@ -234,6 +299,40 @@ export function listRunEvents(
   return request<OkResponse<'listRunEvents'>>(`/runs/${id}/events`, { query: { ...params } })
 }
 
+/**
+ * Содержимое файла артефакта (F-02, fix-task-4): 200 → text/plain (сырой текст),
+ * ошибки — JSON Error{code,message} (404 not_found, 413 too_large > 5 МБ, 401).
+ * Общий request не подходит: он парсит успех как JSON.
+ */
+export async function getArtifactContent(runId: string, artifactId: number): Promise<string> {
+  const url = new URL(`${apiBaseUrl()}/runs/${runId}/artifacts/${artifactId}/content`)
+  const headers = new Headers()
+  const token = apiToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  let response: Response
+  try {
+    response = await fetch(url, { headers })
+  } catch (cause) {
+    throw new ApiError(0, 'daemon_unreachable', 'демон недоступен', {
+      cause: cause instanceof Error ? cause.message : String(cause),
+    })
+  }
+  const text = await response.text()
+  if (!response.ok) {
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (isErrorBody(parsed)) {
+        throw new ApiError(response.status, parsed.code, parsed.message, isDetails(parsed.details) ? parsed.details : undefined)
+      }
+    } catch (error) {
+      if (error instanceof ApiError) throw error
+    }
+    throw new ApiError(response.status, 'internal', `HTTP ${response.status}`)
+  }
+  return text
+}
+
 export function resolveGate(
   id: string,
   body: ResolveGateRequest,
@@ -246,6 +345,115 @@ export function resolveGate(
   })
 }
 
-export function interruptStage(id: number, body: InterruptStageRequest): Promise<OkResponse<'interruptStage'>> {
-  return request<OkResponse<'interruptStage'>>(`/stages/${id}/interrupt`, { method: 'POST', body })
+export function interruptStage(
+  id: number,
+  body: InterruptStageRequest,
+  idempotencyKey?: string,
+): Promise<OkResponse<'interruptStage'>> {
+  return request<OkResponse<'interruptStage'>>(`/stages/${id}/interrupt`, { method: 'POST', body, idempotencyKey })
+}
+
+// --- T-23 vendor-память, T-24 метрики ---
+
+export type MemoryTree = components['schemas']['MemoryTree']
+export type MemoryFileEntry = components['schemas']['MemoryFileEntry']
+export type MemoryFileContent = components['schemas']['MemoryFileContent']
+export type MemoryWriteFileRequest = components['schemas']['MemoryWriteFileRequest']
+export type MemoryHistoryEntry = components['schemas']['MemoryHistoryEntry']
+export type MemoryPromoteRequest = components['schemas']['MemoryPromoteRequest']
+export type RunMetrics = components['schemas']['RunMetrics']
+export type StageMetrics = components['schemas']['StageMetrics']
+export type ProjectMetrics = components['schemas']['ProjectMetrics']
+
+export function memoryTree(): Promise<OkResponse<'memoryTree'>> {
+  return request<OkResponse<'memoryTree'>>('/memory/tree')
+}
+
+type MemoryReadQuery = NonNullable<operations['memoryReadFile']['parameters']['query']>
+
+export function memoryReadFile(query: MemoryReadQuery): Promise<OkResponse<'memoryReadFile'>> {
+  return request<OkResponse<'memoryReadFile'>>('/memory/file', { query: { ...query } })
+}
+
+export function memoryWriteFile(body: MemoryWriteFileRequest): Promise<OkResponse<'memoryWriteFile'>> {
+  return request<OkResponse<'memoryWriteFile'>>('/memory/file', { method: 'PUT', body })
+}
+
+type MemoryHistoryQuery = NonNullable<operations['memoryHistory']['parameters']['query']>
+
+export function memoryHistory(query: MemoryHistoryQuery): Promise<OkResponse<'memoryHistory'>> {
+  return request<OkResponse<'memoryHistory'>>('/memory/history', { query: { ...query } })
+}
+
+export function memoryPromote(body: MemoryPromoteRequest): Promise<OkResponse<'memoryPromote'>> {
+  return request<OkResponse<'memoryPromote'>>('/memory/promote', { method: 'POST', body })
+}
+
+export function getRunMetrics(id: string): Promise<OkResponse<'getRunMetrics'>> {
+  return request<OkResponse<'getRunMetrics'>>(`/runs/${id}/metrics`)
+}
+
+/** Метрики рана в CSV (text/csv) — для скачивания. */
+export function getRunMetricsCsv(id: string): Promise<string> {
+  return requestText(`/runs/${id}/metrics.csv`)
+}
+
+type ProjectMetricsQuery = NonNullable<operations['getProjectMetrics']['parameters']['query']>
+
+export function getProjectMetrics(
+  id: number,
+  query: ProjectMetricsQuery = {},
+): Promise<OkResponse<'getProjectMetrics'>> {
+  return request<OkResponse<'getProjectMetrics'>>(`/projects/${id}/metrics`, { query: { ...query } })
+}
+
+// --- настройки, fs-пикер, уроки, удаление проекта ---
+
+export type Settings = components['schemas']['Settings']
+export type TelegramSettings = components['schemas']['TelegramSettings']
+export type TelegramSettingsPut = components['schemas']['TelegramSettingsPut']
+export type SupervisorSettings = components['schemas']['SupervisorSettings']
+export type SupervisorSettingsPut = components['schemas']['SupervisorSettingsPut']
+export type FsBrowseResult = components['schemas']['FsBrowseResult']
+export type Lesson = components['schemas']['Lesson']
+export type LessonDetail = components['schemas']['LessonDetail']
+
+export function getSettings(): Promise<OkResponse<'getSettings'>> {
+  return request<OkResponse<'getSettings'>>('/settings')
+}
+
+export function putTelegramSettings(body: TelegramSettingsPut): Promise<OkResponse<'putTelegramSettings'>> {
+  return request<OkResponse<'putTelegramSettings'>>('/settings/telegram', { method: 'PUT', body })
+}
+
+export function putSupervisorSettings(body: SupervisorSettingsPut): Promise<OkResponse<'putSupervisorSettings'>> {
+  return request<OkResponse<'putSupervisorSettings'>>('/settings/supervisor', { method: 'PUT', body })
+}
+
+type FsBrowseQuery = NonNullable<operations['fsBrowse']['parameters']['query']>
+
+export function fsBrowse(query: FsBrowseQuery = {}): Promise<OkResponse<'fsBrowse'>> {
+  return request<OkResponse<'fsBrowse'>>('/fs/browse', { query: { ...query } })
+}
+
+type ListLessonsQuery = NonNullable<operations['listLessons']['parameters']['query']>
+
+export function listLessons(filter: ListLessonsQuery = {}): Promise<OkResponse<'listLessons'>> {
+  return request<OkResponse<'listLessons'>>('/lessons', { query: { ...filter } })
+}
+
+export function getLesson(id: string): Promise<OkResponse<'getLesson'>> {
+  return request<OkResponse<'getLesson'>>(`/lessons/${id}`)
+}
+
+type PatchLessonBody = NonNullable<
+  operations['patchLesson']['requestBody']
+>['content']['application/json']
+
+export function patchLesson(id: string, body: PatchLessonBody): Promise<OkResponse<'patchLesson'>> {
+  return request<OkResponse<'patchLesson'>>(`/lessons/${id}`, { method: 'PATCH', body })
+}
+
+export function deleteProject(id: number): Promise<OkResponse<'deleteProject'>> {
+  return request<OkResponse<'deleteProject'>>(`/projects/${id}`, { method: 'DELETE' })
 }

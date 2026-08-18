@@ -67,7 +67,8 @@ export interface paths {
         get: operations["getProject"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Удалить проект КАСКАДНО (раны, стадии, события, гейты, заметки) */
+        delete: operations["deleteProject"];
         options?: never;
         head?: never;
         /** Обновить ide_command / default_branch */
@@ -100,6 +101,92 @@ export interface paths {
         };
         /** Версия пайплайна со списком всех версий */
         get: operations["getPipeline"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pipelines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Создать пайплайн (первая версия) */
+        post: operations["createPipeline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pipelines/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Импорт пайплайна из YAML (T-21) */
+        post: operations["importPipeline"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pipelines/{id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Все версии пайплайна */
+        get: operations["listPipelineVersions"];
+        put?: never;
+        /** Новая версия пайплайна (правка = новая версия, T-21) */
+        post: operations["createPipelineVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pipeline-versions/{vid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Конкретная версия пайплайна */
+        get: operations["getPipelineVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/pipeline-versions/{vid}/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Экспорт версии в YAML (T-21) */
+        get: operations["exportPipelineVersion"];
         put?: never;
         post?: never;
         delete?: never;
@@ -211,6 +298,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/runs/{id}/artifacts/{artifactId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Содержимое файла артефакта (F-02, fix-task-4). Путь читается только
+         *     из записи БД и обязан оставаться внутри каталога рана (run_dir);
+         *     чужой/несуществующий артефакт, выход за run_dir и отсутствующий файл
+         *     → 404. Файл больше cap'а (5 МБ) → 413 (фронт предлагает скачать).
+         */
+        get: operations["getArtifactContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Метрики рана per stage + итоги (D-51, T-24) */
+        get: operations["getRunMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/runs/{id}/metrics.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Экспорт метрик рана в CSV (T-24) */
+        get: operations["getRunMetricsCsv"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Агрегированные метрики проекта за период (T-24) */
+        get: operations["getProjectMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/gates/{id}/resolve": {
         parameters: {
             query?: never;
@@ -239,6 +399,200 @@ export interface paths {
         put?: never;
         /** Interrupt & Steer (D-22) — прервать этап и резюмить с сообщением */
         post: operations["interruptStage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/telegram/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Привязка TG-чата по коду из /start (T-19)
+         * @description Пользователь отправляет боту /start → бот показывает 6-значный код →
+         *     код вводится в UI → chat_id попадает в whitelist (tg_chats).
+         *     Код одноразовый: успешная привязка его погашает.
+         */
+        post: operations["pairTelegram"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Настройки демона (экран настроек UI) */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/telegram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Настройки TG-бота (токен валидируется через getMe, hot-apply адаптера) */
+        put: operations["putTelegramSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/supervisor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Параметры supervisor (watchdog, пул процессов; hot-apply) */
+        put: operations["putSupervisorSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fs/browse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Листинг подкаталогов (выбор папки проекта в браузерном UI, T-16) */
+        get: operations["fsBrowse"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lessons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Список уроков (D-52, T-29) */
+        get: operations["listLessons"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lessons/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Урок с содержимым файла */
+        get: operations["getLesson"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Смена статуса урока (confirm/reject из UI) */
+        patch: operations["patchLesson"];
+        trace?: never;
+    };
+    "/memory/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Дерево vendor-памяти (глобальная + по проектам), T-23 */
+        get: operations["memoryTree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memory/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Содержимое файла памяти */
+        get: operations["memoryReadFile"];
+        /** Ручная правка файла памяти (T-23) */
+        put: operations["memoryWriteFile"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memory/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История изменений файла глобальной памяти (git log) */
+        get: operations["memoryHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/memory/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Промоушн записи локальной памяти в глобальную (T-23) */
+        post: operations["memoryPromote"];
         delete?: never;
         options?: never;
         head?: never;
@@ -279,6 +633,10 @@ export interface components {
              */
             code: string;
             message: string;
+            /**
+             * @description контекст ошибки: dirty_checkout → {files: string[]};
+             *     run_locked → {branch: string, run_id: string} (F-02)
+             */
             details?: {
                 [key: string]: unknown;
             };
@@ -295,6 +653,11 @@ export interface components {
             name: string;
             default_branch: string;
             ide_command: string;
+            /**
+             * @description дефолт notify_tg для новых ранов проекта (T-16)
+             * @default true
+             */
+            notify_tg_default: boolean;
             /** Format: date-time */
             created_at: string;
         };
@@ -307,6 +670,7 @@ export interface components {
         PatchProjectRequest: {
             default_branch?: string;
             ide_command?: string;
+            notify_tg_default?: boolean;
         };
         ProjectDetail: components["schemas"]["Project"] & {
             active_runs: components["schemas"]["Run"][];
@@ -333,12 +697,165 @@ export interface components {
         PipelineDetail: components["schemas"]["Pipeline"] & {
             versions: components["schemas"]["Pipeline"][];
         };
+        StageMetrics: {
+            /** Format: int64 */
+            stage_id: number;
+            stage_key: string;
+            /** Format: int64 */
+            iteration: number;
+            state: components["schemas"]["StageState"];
+            /**
+             * Format: int64
+             * @description 0 = harness не сообщил usage (показывать «—»)
+             */
+            tokens_in: number;
+            /** Format: int64 */
+            tokens_out: number;
+            /** @description finished_at - started_at; null если не завершена */
+            duration_sec?: number | null;
+            /** Format: int64 */
+            resume_count: number;
+            /** Format: int64 */
+            exit_code?: number | null;
+        };
+        RunMetrics: {
+            run_id: string;
+            stages: components["schemas"]["StageMetrics"][];
+            totals: {
+                /** Format: int64 */
+                tokens_in: number;
+                /** Format: int64 */
+                tokens_out: number;
+                duration_sec?: number | null;
+                stages_count: number;
+            };
+            /** @description суммарное ожидание гейтов (производное событий, не хранится) */
+            gate_wait_seconds: number;
+        };
+        ProjectMetrics: {
+            /** Format: int64 */
+            project_id: number;
+            period: string;
+            runs_total: number;
+            /** Format: int64 */
+            tokens_in: number;
+            /** Format: int64 */
+            tokens_out: number;
+            total_duration_sec?: number;
+            /** @description число ранов по состояниям */
+            by_state: {
+                [key: string]: number;
+            };
+        };
+        Settings: {
+            telegram: components["schemas"]["TelegramSettings"];
+            supervisor: components["schemas"]["SupervisorSettings"];
+        };
+        TelegramSettings: {
+            enabled: boolean;
+            has_token: boolean;
+            /** @description первые/последние символы, полный токен не отдаётся */
+            token_masked?: string;
+            /** @description из getMe при валидном токене */
+            bot_username?: string | null;
+        };
+        TelegramSettingsPut: {
+            enabled: boolean;
+            /** @description пусто = оставить текущий; валидация через getMe */
+            token?: string;
+        };
+        SupervisorSettings: {
+            stall_timeout_sec: number;
+            stage_timeout_min: number;
+            max_parallel: number;
+            /** Format: int64 */
+            max_auto_resumes: number;
+        };
+        SupervisorSettingsPut: {
+            stall_timeout_sec?: number;
+            stage_timeout_min?: number;
+            max_parallel?: number;
+            /** Format: int64 */
+            max_auto_resumes?: number;
+        };
+        FsBrowseResult: {
+            path: string;
+            parent?: string | null;
+            dirs: {
+                name: string;
+                path: string;
+                /** @description есть .git — подсказка «это проект» */
+                is_git_repo: boolean;
+            }[];
+        };
+        Lesson: {
+            id: string;
+            title: string;
+            /** @enum {string} */
+            scope: "global" | "project";
+            /** @enum {string} */
+            status: "proposed" | "confirmed" | "rejected" | "superseded";
+            /** Format: int64 */
+            project_id?: number | null;
+            path: string;
+            run_id?: string | null;
+            stage_key?: string;
+            /** Format: int64 */
+            applied_count?: number;
+            /** Format: int64 */
+            relapse_count?: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        LessonDetail: components["schemas"]["Lesson"] & {
+            content: string;
+        };
+        MemoryFileEntry: {
+            path: string;
+            vendor: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        MemoryTree: {
+            global: components["schemas"]["MemoryFileEntry"][];
+            projects: {
+                /** Format: int64 */
+                project_id: number;
+                project_name: string;
+                files: components["schemas"]["MemoryFileEntry"][];
+            }[];
+        };
+        MemoryFileContent: {
+            vendor: string;
+            scope: string;
+            content: string;
+        };
+        MemoryWriteFileRequest: {
+            /** @enum {string} */
+            scope: "global" | "project";
+            vendor: string;
+            content: string;
+            /** Format: int64 */
+            project_id?: number | null;
+        };
+        MemoryHistoryEntry: {
+            hash: string;
+            date: string;
+            message: string;
+        };
+        MemoryPromoteRequest: {
+            vendor: string;
+            /** Format: int64 */
+            project_id: number;
+        };
         /** @enum {string} */
         RunState: "draft" | "running" | "waiting_gate" | "succeeded" | "failed" | "stopped";
         /** @enum {string} */
         StageState: "pending" | "running" | "succeeded" | "failed" | "interrupted" | "skipped";
         /** @enum {string} */
-        GateKind: "plan_approval" | "question" | "escalation" | "final_review";
+        GateKind: "plan_approval" | "question" | "escalation" | "final_review" | "lesson_review";
         /** @enum {string} */
         GateState: "open" | "answered" | "approved" | "rejected" | "expired";
         Run: {
@@ -358,6 +875,29 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             finished_at?: string | null;
+        };
+        CreatePipelineRequest: {
+            name: string;
+            /**
+             * Format: int64
+             * @description NULL = глобальный пайплайн
+             */
+            project_id?: number | null;
+            spec_json: string;
+        };
+        CreatePipelineVersionRequest: {
+            spec_json: string;
+        };
+        ImportPipelineRequest: {
+            /** @description пайплайн в YAML-формате T-21 */
+            yaml: string;
+            /**
+             * @description new — всегда новый пайплайн; version — новая версия
+             *     существующего по имени; fail — ошибка при совпадении имени
+             * @default new
+             * @enum {string}
+             */
+            on_conflict: "new" | "version" | "fail";
         };
         CreateRunRequest: {
             /** Format: int64 */
@@ -489,10 +1029,22 @@ export interface components {
             kind: components["schemas"]["EventKind"];
             payload: components["schemas"]["EventPayload"];
         };
+        PairTelegramRequest: {
+            /** @description 6-значный код, выданный ботом на /start */
+            code: string;
+        };
+        PairTelegramResponse: {
+            /**
+             * Format: int64
+             * @description привязанный чат (добавлен в whitelist)
+             */
+            chat_id: number;
+        };
         /** @enum {string} */
-        EventKind: "run.state_changed" | "run.branch_mismatch" | "stage.state_changed" | "stage.queued" | "stage.interrupted" | "stage.resumed" | "gate.opened" | "gate.resolved" | "stream.thinking" | "stream.text" | "stream.tool_call" | "stream.tool_result" | "stream.usage" | "stream.error" | "stream.raw" | "system";
+        EventKind: "run.created" | "run.state_changed" | "run.branch_mismatch" | "stage.state_changed" | "stage.queued" | "stage.interrupted" | "stage.resumed" | "gate.opened" | "gate.resolved" | "stream.thinking" | "stream.text" | "stream.tool_call" | "stream.tool_result" | "stream.usage" | "stream.error" | "stream.raw" | "system";
         /**
          * @description Полиморфный payload события (детерминирован kind'ом события):
+         *     - run.created → RunCreatedPayload
          *     - run.state_changed / stage.state_changed → StateChangedPayload
          *     - gate.opened / gate.resolved → GatePayload
          *     - stream.thinking / stream.text / stream.raw → StreamTextPayload
@@ -502,6 +1054,28 @@ export interface components {
          */
         EventPayload: {
             [key: string]: unknown;
+        };
+        /**
+         * @description run.created (F-01, fix-task-4) — сериализованный объект рана в момент
+         *     создания (состояние draft); поля совпадают со схемой Run. Пишется в
+         *     той же транзакции, что и создание рана (D-11); повтор по
+         *     Idempotency-Key второго события не порождает (D-12).
+         */
+        RunCreatedPayload: {
+            id: string;
+            /** Format: int64 */
+            project_id: number;
+            /** Format: int64 */
+            pipeline_version_id: number;
+            task_text: string;
+            base_branch?: string;
+            branch: string;
+            state: components["schemas"]["RunState"];
+            /** Format: int64 */
+            depth?: number;
+            notify_tg?: boolean;
+            /** Format: date-time */
+            created_at: string;
         };
         StateChangedPayload: {
             /** @description пусто при создании сущности */
@@ -699,6 +1273,31 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    deleteProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description удалён */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        deleted?: boolean;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     patchProject: {
         parameters: {
             query?: never;
@@ -767,6 +1366,152 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PipelineDetail"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createPipeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePipelineRequest"];
+            };
+        };
+        responses: {
+            /** @description создан (версия 1) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pipeline"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    importPipeline: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportPipelineRequest"];
+            };
+        };
+        responses: {
+            /** @description импортирован (новый пайплайн или новая версия) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pipeline"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listPipelineVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["PipelineId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description версии (desc) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pipeline"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createPipelineVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["PipelineId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePipelineVersionRequest"];
+            };
+        };
+        responses: {
+            /** @description создана версия N+1 с parent_version_id=id */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pipeline"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getPipelineVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vid: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description версия */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pipeline"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportPipelineVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                vid: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description YAML пайплайна (стабильный порядок ключей) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/yaml": string;
                 };
             };
             default: components["responses"]["Error"];
@@ -966,6 +1711,110 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getArtifactContent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["RunId"];
+                artifactId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description содержимое файла (UTF-8) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description файл больше cap'а (5 МБ) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getRunMetrics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description метрики */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunMetrics"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getRunMetricsCsv: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["RunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV по попыткам этапов */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProjectMetrics: {
+        parameters: {
+            query?: {
+                period?: "24h" | "7d" | "30d" | "all";
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description метрики проекта */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMetrics"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     resolveGate: {
         parameters: {
             query?: never;
@@ -1018,6 +1867,324 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Stage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pairTelegram: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairTelegramRequest"];
+            };
+        };
+        responses: {
+            /** @description чат привязан */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairTelegramResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description настройки (секреты замаскированы) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+        };
+    };
+    putTelegramSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramSettingsPut"];
+            };
+        };
+        responses: {
+            /** @description сохранено и применено */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TelegramSettings"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSupervisorSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupervisorSettingsPut"];
+            };
+        };
+        responses: {
+            /** @description сохранено и применено */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupervisorSettings"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    fsBrowse: {
+        parameters: {
+            query?: {
+                /** @description абсолютный путь; пусто = домашний каталог */
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description подкаталоги */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FsBrowseResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listLessons: {
+        parameters: {
+            query?: {
+                status?: "proposed" | "confirmed" | "rejected" | "superseded";
+                scope?: "global" | "project";
+                project_id?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description уроки */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getLesson: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description урок */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LessonDetail"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    patchLesson: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {string} */
+                    status: "proposed" | "confirmed" | "rejected" | "superseded";
+                };
+            };
+        };
+        responses: {
+            /** @description обновлён */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Lesson"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    memoryTree: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description дерево памяти */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryTree"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    memoryReadFile: {
+        parameters: {
+            query: {
+                scope: "global" | "project";
+                vendor: string;
+                project_id?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description содержимое */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryFileContent"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    memoryWriteFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryWriteFileRequest"];
+            };
+        };
+        responses: {
+            /** @description сохранено (+ git commit для глобальной) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryFileContent"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    memoryHistory: {
+        parameters: {
+            query: {
+                vendor: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description история */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryHistoryEntry"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    memoryPromote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryPromoteRequest"];
+            };
+        };
+        responses: {
+            /** @description продвинуто */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        path?: string;
+                    };
                 };
             };
             default: components["responses"]["Error"];

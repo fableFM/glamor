@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/fableFM/glamor/internal/events"
 	"github.com/fableFM/glamor/internal/harness"
@@ -17,8 +19,9 @@ func DefaultPromptBuilder(_ context.Context, lc LaunchContext) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Задача: %s\n\nЭтап пайплайна: %s.\n", lc.Run.TaskText, lc.Stage.StageKey)
 	if lc.StageSpec.Artifact != nil && lc.StageSpec.Artifact.Required {
+		artifactPath := expandPath(lc.StageSpec.Artifact.Path, lc.Run.ID, lc.RunDir)
 		fmt.Fprintf(&b, "Обязательный артефакт этапа: файл %s — без него этап не засчитывается.\n",
-			lc.StageSpec.Artifact.Path)
+			artifactPath)
 	}
 	if lc.IsResume {
 		fmt.Fprintf(&b, "\nТы был прерван (попытка %d). Продолжи с места прерывания и заверши этап.\n",
@@ -79,8 +82,12 @@ func streamPayload(ev harness.Event) string {
 }
 
 // stageBatcher — StreamBatcher с явным интерфейсом (для подмены в тестах).
+// Цикл сброса стартует СРАЗУ (баг 2026-08-18: без Start события копились
+// до Close → у живого этапа стрим в UI был пуст до его завершения).
 func newStageBatcher(journal *events.Journal, runID string, stageID *int64) batchWriter {
-	return &journalBatcher{inner: events.NewStreamBatcher(journal, runID, stageID)}
+	b := events.NewStreamBatcher(journal, runID, stageID)
+	b.Start(context.Background()) // остановка — через Close в конце попытки
+	return &journalBatcher{inner: b}
 }
 
 type journalBatcher struct {
@@ -110,4 +117,24 @@ func joinPath(dir, rel string) string {
 		return rel
 	}
 	return filepath.Join(dir, rel)
+}
+
+// --- process helpers ---------------------------------------------------------
+
+// setProcessGroup запускает процесс в отдельной группе (убивать с детьми).
+func setProcessGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+// killProcessGroupCmd — SIGKILL всей группе процесса.
+func killProcessGroupCmd(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	pgid, err := syscall.Getpgid(cmd.Process.Pid)
+	if err == nil {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		return
+	}
+	_ = cmd.Process.Kill()
 }

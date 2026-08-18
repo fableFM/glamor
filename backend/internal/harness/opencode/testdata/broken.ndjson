@@ -1,0 +1,4 @@
+{"type":"step_start","timestamp":1767036059338,"sessionID":"ses_broken_1","part":{"id":"prt_01","sessionID":"ses_broken_1","messageID":"msg_01","type":"step-start"}}
+{"type":"text","timestamp":1767036059700,"sessionID":"ses_broken_1","part":{"id":"prt_02","type":"text","text":"обрезанный
+not json at all
+{"type":"step_finish","timestamp":1767036064273,"sessionID":"ses_broken_1","part":{"id":"prt_03","sessionID":"ses_broken_1","messageID":"msg_01","type":"step-finish","reason":"stop","cost":0.001,"tokens":{"input":671,"output":8,"reasoning":0,"cache":{"read":21415,"write":0}}}}

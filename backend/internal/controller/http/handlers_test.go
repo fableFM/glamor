@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,6 +42,8 @@ type fixture struct {
 	machine   *runsmachine.Machine
 	client    *http.Client
 	pipelines pipelinesrep.RepositoryWithTX
+	artifacts artifactsrep.RepositoryWithTX
+	runsDir   string
 	db        *sql.DB
 }
 
@@ -65,20 +69,25 @@ func newFixture(t *testing.T) *fixture {
 		notesrep.NewRepository(db), projectsrep.NewRepository(db),
 		pipelinesrep.NewRepository(db), gatesrep.NewRepository(db))
 
+	runsDir := t.TempDir()
+	artifactsRepo := artifactsrep.NewRepository(db)
 	rest := httpctrl.NewHandler(httpctrl.Deps{
 		Machine: runsSvc,
 		API: catalog.New(
 			projectsrep.NewRepository(db), pipelinesrep.NewRepository(db),
 			runsrep.NewRepository(db), stagesrep.NewRepository(db),
-			gatesrep.NewRepository(db), artifactsrep.NewRepository(db),
-			notesrep.NewRepository(db), journal),
+			gatesrep.NewRepository(db), artifactsRepo,
+			notesrep.NewRepository(db), journal, runsDir),
 		Token:   testToken,
 		Version: "test",
 	})
 
 	server := httptest.NewServer(rest)
 	t.Cleanup(server.Close)
-	return &fixture{server: server, machine: machine, pipelines: pipelinesrep.NewRepository(db), db: db, client: server.Client()}
+	return &fixture{
+		server: server, machine: machine, pipelines: pipelinesrep.NewRepository(db),
+		artifacts: artifactsRepo, runsDir: runsDir, db: db, client: server.Client(),
+	}
 }
 
 func (f *fixture) do(t *testing.T, method, path string, body any, headers map[string]string) (int, map[string]any) {
@@ -140,6 +149,7 @@ func TestProjects_CRUD(t *testing.T) {
 
 	project := f.createProject(t, "/tmp/glamor-test-1")
 	projectID := int64(project["id"].(float64))
+	assert.Equal(t, true, project["notify_tg_default"], "дефолт notify_tg_default=true (F-04)")
 
 	// повторный POST с тем же path → 200 с тем же проектом
 	status, dup := f.do(t, "POST", "/projects", map[string]any{
@@ -165,6 +175,13 @@ func TestProjects_CRUD(t *testing.T) {
 	}, nil)
 	require.Equal(t, 200, status)
 	assert.Equal(t, "goland", patched["ide_command"])
+
+	// patch notify_tg_default (F-04)
+	status, patched = f.do(t, "PATCH", fmt.Sprintf("/projects/%d", projectID), map[string]any{
+		"notify_tg_default": false,
+	}, nil)
+	require.Equal(t, 200, status)
+	assert.Equal(t, false, patched["notify_tg_default"])
 
 	// 404
 	status, errBody := f.do(t, "GET", "/projects/9999", nil, nil)
@@ -194,10 +211,14 @@ func TestCreateRun_IdempotencyKey(t *testing.T) {
 	require.Equal(t, 200, status)
 	assert.Equal(t, run["id"], dup["id"])
 
-	// другой ключ, та же ветка → 409 run_locked (D-33)
+	// другой ключ, та же ветка → 409 run_locked (D-33) + details.branch/run_id (F-02)
 	status, locked := f.do(t, "POST", "/runs", body, map[string]string{"Idempotency-Key": uuid.New()})
 	require.Equal(t, 409, status, "body: %v", locked)
 	assert.Equal(t, "run_locked", locked["code"])
+	details, ok := locked["details"].(map[string]any)
+	require.True(t, ok, "run_locked должен нести details: %v", locked)
+	assert.Equal(t, "glamor/fix-the-bug-in-parser", details["branch"])
+	assert.Equal(t, run["id"], details["run_id"])
 
 	// та же ветка, но явно другая → 201
 	body["branch"] = "feature/other"
@@ -395,4 +416,154 @@ func TestAuth(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Equal(t, 401, resp.StatusCode)
+}
+
+// --- artifact content (F-02, fix-task-4) ---------------------------------------
+
+// doRaw — GET без JSON-парсинга ответа (для text/plain).
+func (f *fixture) doRaw(t *testing.T, path string) (int, http.Header, string) {
+	t.Helper()
+
+	req, err := http.NewRequest("GET", f.server.URL+path, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+
+	resp, err := f.client.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, resp.Header, string(data)
+}
+
+// createRunHTTP создаёт ран через API и возвращает его id.
+func (f *fixture) createRunHTTP(t *testing.T, project map[string]any, pipelineID int64) string {
+	t.Helper()
+	status, run := f.do(t, "POST", "/runs", map[string]any{
+		"project_id": project["id"], "pipeline_version_id": pipelineID,
+		"task_text": "artifact run " + uuid.New(),
+	}, nil)
+	require.Equal(t, 201, status, "body: %v", run)
+	return run["id"].(string)
+}
+
+// addArtifact регистрирует артефакт рана с заданным path в БД.
+func (f *fixture) addArtifact(t *testing.T, runID, path string) int64 {
+	t.Helper()
+	id, err := f.artifacts.CreateArtifact(context.Background(), dtorep.CreateArtifactRequest{
+		RunID: runID, Path: path, Kind: "prompt",
+	})
+	require.NoError(t, err)
+	return id
+}
+
+// GET содержимого артефакта: 200 text/plain; 404 чужой/несуществующий/
+// traversal; 413 выше cap'а (5 МБ).
+func TestGetArtifactContent(t *testing.T) {
+	f := newFixture(t)
+	project := f.createProject(t, "/tmp/glamor-test-artifacts")
+	pipelineID := f.createPipeline(t)
+	runID := f.createRunHTTP(t, project, pipelineID)
+	otherRunID := f.createRunHTTP(t, project, pipelineID)
+
+	// файл артефакта внутри run_dir рана
+	runDir := filepath.Join(f.runsDir, runID)
+	require.NoError(t, os.MkdirAll(runDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(runDir, "prompt-plan-1.md"), []byte("# привет\nprompt body"), 0o600))
+	artifactID := f.addArtifact(t, runID, filepath.Join(runDir, "prompt-plan-1.md"))
+
+	// 200: содержимое + Content-Type
+	status, header, body := f.doRaw(t, fmt.Sprintf("/runs/%s/artifacts/%d/content", runID, artifactID))
+	require.Equal(t, 200, status)
+	assert.Equal(t, "text/plain", header.Get("Content-Type"))
+	assert.Equal(t, "# привет\nprompt body", body)
+
+	// 404: чужой ран
+	status, _, _ = f.doRaw(t, fmt.Sprintf("/runs/%s/artifacts/%d/content", otherRunID, artifactID))
+	assert.Equal(t, 404, status)
+
+	// 404: несуществующий id
+	status, _, _ = f.doRaw(t, fmt.Sprintf("/runs/%s/artifacts/%d/content", runID, 99999))
+	assert.Equal(t, 404, status)
+
+	// 404: запись с выходом за run_dir (скомпрометированная запись, ../)
+	traversalID := f.addArtifact(t, runID, filepath.Join(runDir, "..", "..", "secret.txt"))
+	status, _, _ = f.doRaw(t, fmt.Sprintf("/runs/%s/artifacts/%d/content", runID, traversalID))
+	assert.Equal(t, 404, status)
+
+	// 404: запись валидна, но файла на диске нет
+	missingID := f.addArtifact(t, runID, filepath.Join(runDir, "missing.md"))
+	status, _, _ = f.doRaw(t, fmt.Sprintf("/runs/%s/artifacts/%d/content", runID, missingID))
+	assert.Equal(t, 404, status)
+
+	// 413: файл больше cap'а (5 МБ)
+	bigPath := filepath.Join(runDir, "big.log")
+	big, err := os.Create(bigPath)
+	require.NoError(t, err)
+	require.NoError(t, big.Truncate(catalog.MaxArtifactContentBytes+1))
+	require.NoError(t, big.Close())
+	bigID := f.addArtifact(t, runID, bigPath)
+	status, _, body = f.doRaw(t, fmt.Sprintf("/runs/%s/artifacts/%d/content", runID, bigID))
+	assert.Equal(t, 413, status)
+	assert.Contains(t, body, "too_large")
+}
+
+// CORS: preflight и Allow-Origin для локальных origins (иначе UI из
+// vite/tauri блокируется браузером).
+func TestCORS(t *testing.T) {
+	f := newFixture(t)
+
+	req, _ := http.NewRequest("OPTIONS", f.server.URL+"/projects", nil)
+	req.Header.Set("Origin", "http://127.0.0.1:5173")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	resp, err := f.client.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, 204, resp.StatusCode)
+	assert.Equal(t, "http://127.0.0.1:5173", resp.Header.Get("Access-Control-Allow-Origin"))
+
+	// обычный запрос тоже с заголовком
+	req, _ = http.NewRequest("GET", f.server.URL+"/projects", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err = f.client.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "http://localhost:5173", resp.Header.Get("Access-Control-Allow-Origin"))
+}
+
+// Каскадное удаление проекта: история уходит, активный ран блокирует (400).
+func TestDeleteProject(t *testing.T) {
+	f := newFixture(t)
+	project := f.createProject(t, "/tmp/glamor-test-delete")
+	projectID := int64(project["id"].(float64))
+
+	// активный (draft) ран блокирует удаление
+	pipelineID := f.createPipeline(t)
+	status, body := f.do(t, "POST", "/runs", map[string]any{
+		"project_id": projectID, "pipeline_version_id": pipelineID, "task_text": "t",
+	}, nil)
+	require.Equal(t, 201, status)
+	runID := body["id"].(string)
+
+	status, errBody := f.do(t, "DELETE", fmt.Sprintf("/projects/%d", projectID), nil, nil)
+	require.Equal(t, 400, status, "body: %v", errBody)
+	assert.Equal(t, "validation", errBody["code"])
+
+	// останавливаем ран → удаление проходит, каскад чистит историю
+	status, _ = f.do(t, "POST", "/runs/"+runID+"/stop", nil, nil)
+	require.Equal(t, 200, status)
+
+	status, delResp := f.do(t, "DELETE", fmt.Sprintf("/projects/%d", projectID), nil, nil)
+	require.Equal(t, 200, status, "body: %v", delResp)
+	assert.Equal(t, true, delResp["deleted"])
+
+	status, _ = f.do(t, "GET", fmt.Sprintf("/projects/%d", projectID), nil, nil)
+	assert.Equal(t, 404, status)
+
+	// ide_command по умолчанию — goland
+	proj2 := f.createProject(t, "/tmp/glamor-test-delete-2")
+	assert.Equal(t, "goland", proj2["ide_command"])
 }

@@ -9,4 +9,5 @@ echo "artifact" > "$WORK_DIR/artifact.txt"
 echo "artifact" > "$WORK_DIR/a1.txt"
 echo "artifact" > "$WORK_DIR/a2.txt"
 echo '{"kind":"usage","usage":{"input":100,"output":50}}'
+echo '{"kind":"usage","usage":{"input":7,"output":3}}'
 exit 0

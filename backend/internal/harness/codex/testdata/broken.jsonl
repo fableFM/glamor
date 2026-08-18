@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"thread-broken-1"}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"обрезанный на краше отв
+not json at all — garbage line in stdout
+{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":10}}

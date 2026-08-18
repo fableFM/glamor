@@ -14,6 +14,8 @@ type Queries interface {
 	GetProjectByPath(ctx context.Context, path string) (*dtorep.Project, error)
 	ListProjects(ctx context.Context) ([]dtorep.Project, error)
 	UpdateProject(ctx context.Context, id int64, req dtorep.PatchProjectRequest) error
+	// DeleteProjectCascade — удаление проекта со всей историей (необратимо).
+	DeleteProjectCascade(ctx context.Context, id int64) error
 }
 
 type RepositoryWithTX interface {

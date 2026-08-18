@@ -7,10 +7,12 @@ package runsapi
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/fableFM/glamor/internal/cstmerrors"
 	"github.com/fableFM/glamor/internal/dto/dtorep"
@@ -27,17 +29,29 @@ import (
 // Service — API-сценарии ранов. Стейт-машина (runsmachine) — за полем
 // machine; свои репозитории — для чтений и идемпотентности сценариев.
 type Service struct {
-	machine     *runsmachine.Machine
-	txm         runsmachine.TxExecutor
-	appender    runsmachine.EventAppender
-	runs        runsrep.RepositoryWithTX
-	stages      stagesrep.RepositoryWithTX
-	notes       notesrep.RepositoryWithTX
-	projects    projectsrep.RepositoryWithTX
-	pipelines   pipelinesrep.RepositoryWithTX
-	gates       gatesrep.RepositoryWithTX
-	preflight   PreflightFunc
-	branchNamer BranchNamerFunc
+	machine          *runsmachine.Machine
+	txm              runsmachine.TxExecutor
+	appender         runsmachine.EventAppender
+	runs             runsrep.RepositoryWithTX
+	stages           stagesrep.RepositoryWithTX
+	notes            notesrep.RepositoryWithTX
+	projects         projectsrep.RepositoryWithTX
+	pipelines        pipelinesrep.RepositoryWithTX
+	gates            gatesrep.RepositoryWithTX
+	preflight        PreflightFunc
+	branchNamer      BranchNamerFunc
+	lessonsFinalizer LessonsFinalizer
+}
+
+// LessonsFinalizer — резолв-эффекты гейта lesson_review (T-29);
+// реализация — internal/service/lessons.GateFinalizer.
+type LessonsFinalizer interface {
+	FinalizeLessonGate(ctx context.Context, gate *dtorep.Gate, action string, text *string) error
+}
+
+// SetLessonsFinalizer подключает контур уроков (T-29).
+func (u *Service) SetLessonsFinalizer(f LessonsFinalizer) {
+	u.lessonsFinalizer = f
 }
 
 // New собирает сценарии из готовых зависимостей (ручной DI в main, D-80).
@@ -138,37 +152,94 @@ func (u *Service) CreateRun(ctx context.Context, params CreateRunParams) (run *d
 	}
 
 	runID := uuid.New()
-	err = u.runs.CreateRun(ctx, dtorep.CreateRunRequest{
-		ID:                runID,
-		ProjectID:         params.ProjectID,
-		PipelineVersionID: params.PipelineVersionID,
-		TaskText:          params.TaskText,
-		BaseBranch:        params.BaseBranch,
-		Branch:            params.Branch,
-		State:             dtorep.RunStateDraft,
-		Depth:             params.Depth,
-		NotifyTG:          params.NotifyTG,
-		IdempotencyKey:    params.IdempotencyKey,
-	})
-	switch {
-	case err == nil:
-	case errors.Is(err, cstmerrors.ErrDuplicate):
-		// повтор ключа → первый ран; иначе — lock ветки (D-33)
-		existing, getErr := u.runs.GetRunByIdempotencyKey(ctx, params.IdempotencyKey)
-		if getErr == nil {
-			return existing, true, nil
+	err = u.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		runsTx := runsrep.NewTx(tx)
+
+		err := runsTx.CreateRun(ctx, dtorep.CreateRunRequest{
+			ID:                runID,
+			ProjectID:         params.ProjectID,
+			PipelineVersionID: params.PipelineVersionID,
+			TaskText:          params.TaskText,
+			BaseBranch:        params.BaseBranch,
+			Branch:            params.Branch,
+			State:             dtorep.RunStateDraft,
+			Depth:             params.Depth,
+			NotifyTG:          params.NotifyTG,
+			IdempotencyKey:    params.IdempotencyKey,
+		})
+		switch {
+		case err == nil:
+		case errors.Is(err, cstmerrors.ErrDuplicate):
+			// повтор ключа → первый ран, второе событие НЕ пишем (D-12);
+			// иначе — lock ветки (D-33)
+			existing, getErr := runsTx.GetRunByIdempotencyKey(ctx, params.IdempotencyKey)
+			if getErr == nil {
+				run = existing
+				alreadyExisted = true
+				return nil
+			}
+			// находим активный ран, держащий ветку, — контекст для details (F-02)
+			if active, actErr := runsTx.GetActiveRunByBranch(ctx, params.ProjectID, params.Branch); actErr == nil {
+				return &cstmerrors.RunLockedError{Branch: params.Branch, RunID: active.ID}
+			}
+			return fmt.Errorf("project %d branch %s: %w",
+				params.ProjectID, params.Branch, cstmerrors.ErrRunLocked)
+		default:
+			return err
 		}
-		return nil, false, fmt.Errorf("project %d branch %s: %w",
-			params.ProjectID, params.Branch, cstmerrors.ErrRunLocked)
-	default:
+
+		created, err := runsTx.GetRunByID(ctx, runID)
+		if err != nil {
+			return fmt.Errorf("failed to load created run: %w", err)
+		}
+		run = created
+
+		// D-11: создание рана — событие журнала в той же транзакции;
+		// payload — объект рана целиком (фронт строит карточку без REST)
+		payload, err := json.Marshal(newRunCreatedPayload(created))
+		if err != nil {
+			return fmt.Errorf("failed to marshal run.created payload: %w", err)
+		}
+		return u.appender.Append(ctx, tx, dtorep.Event{
+			RunID:       runID,
+			Kind:        runsmachine.EventKindRunCreated,
+			PayloadJSON: string(payload),
+		})
+	})
+	if err != nil {
 		return nil, false, err
 	}
+	return run, alreadyExisted, nil
+}
 
-	run, err = u.runs.GetRunByID(ctx, runID)
-	if err != nil {
-		return nil, false, fmt.Errorf("failed to load created run: %w", err)
+// runCreatedPayload — payload события run.created (F-01, fix-task-4):
+// форма совпадает с REST-схемой Run (api/openapi.yaml, RunCreatedPayload).
+type runCreatedPayload struct {
+	ID                string    `json:"id"`
+	ProjectID         int64     `json:"project_id"`
+	PipelineVersionID int64     `json:"pipeline_version_id"`
+	TaskText          string    `json:"task_text"`
+	BaseBranch        string    `json:"base_branch"`
+	Branch            string    `json:"branch"`
+	State             string    `json:"state"`
+	Depth             int64     `json:"depth"`
+	NotifyTG          bool      `json:"notify_tg"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func newRunCreatedPayload(run *dtorep.Run) runCreatedPayload {
+	return runCreatedPayload{
+		ID:                run.ID,
+		ProjectID:         run.ProjectID,
+		PipelineVersionID: run.PipelineVersionID,
+		TaskText:          run.TaskText,
+		BaseBranch:        run.BaseBranch,
+		Branch:            run.Branch,
+		State:             string(run.State),
+		Depth:             run.Depth,
+		NotifyTG:          run.NotifyTG,
+		CreatedAt:         run.CreatedAt,
 	}
-	return run, false, nil
 }
 
 // StopRun — остановка пользователем (D-14): run → stopped, running-стадии
@@ -237,6 +308,26 @@ func (u *Service) ResumeRun(ctx context.Context, runID string) (*dtorep.Run, err
 	case dtorep.RunStateRunning, dtorep.RunStateWaitingGate:
 		return run, nil // идемпотентный повтор
 	case dtorep.RunStateFailed:
+		// ре-вход упавшей стадии ДО смены состояния рана (иначе NextAction
+		// увидит failed-стадию и снова завершит ран). Новая попытка резюмит
+		// сессию предыдущей (supervisor берёт session_id из iteration-1).
+		stages, err := u.stages.ListStagesByRun(ctx, runID)
+		if err != nil {
+			return nil, err
+		}
+		var lastFailed *dtorep.Stage
+		for i := range stages {
+			if stages[i].State == dtorep.StageStateFailed {
+				if lastFailed == nil || stages[i].ID > lastFailed.ID {
+					lastFailed = &stages[i]
+				}
+			}
+		}
+		if lastFailed != nil {
+			if _, err := u.machine.ReenterStage(ctx, lastFailed.ID, ""); err != nil {
+				return nil, fmt.Errorf("failed to re-enter failed stage: %w", err)
+			}
+		}
 		if err := u.machine.TransitionRun(ctx, runID, dtorep.RunStateRunning); err != nil {
 			return nil, err
 		}
@@ -301,10 +392,16 @@ func (u *Service) ResolveGateAPI(ctx context.Context, gateID string, action Gate
 		return nil, false, err
 	}
 
-	// Диалоговый резолв (D-20/22): answer/comment с текстом по гейту этапа
-	// → ре-вход этапа с сообщением (resume сессии с ответом).
-	if (action == GateActionAnswer || action == GateActionComment) &&
+	// Гейт «Сохранить урок?» (T-29, D-52): применяем решение к черновикам;
+	// ре-вход этапа НЕ делаем — это не диалог с этапом.
+	if gate.Kind == dtorep.GateKindLessonReview && u.lessonsFinalizer != nil {
+		if err := u.lessonsFinalizer.FinalizeLessonGate(ctx, gate, string(action), text); err != nil {
+			return nil, false, err
+		}
+	} else if (action == GateActionAnswer || action == GateActionComment) &&
 		text != nil && *text != "" && gate.StageID != nil {
+		// Диалоговый резолв (D-20/22): answer/comment с текстом по гейту
+		// этапа → ре-вход этапа с сообщением (resume сессии с ответом).
 		if _, err := u.machine.ReenterStage(ctx, *gate.StageID, *text); err != nil {
 			return nil, false, err
 		}

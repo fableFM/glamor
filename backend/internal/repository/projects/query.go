@@ -19,11 +19,11 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-const projectColumns = `id, path, name, default_branch, ide_command, created_at`
+const projectColumns = `id, path, name, default_branch, ide_command, notify_tg_default, created_at`
 
 func scanProject(s scanner) (project, error) {
 	var p project
-	err := s.Scan(&p.id, &p.path, &p.name, &p.defaultBranch, &p.ideCommand, &p.createdAt)
+	err := s.Scan(&p.id, &p.path, &p.name, &p.defaultBranch, &p.ideCommand, &p.notifyTGDefault, &p.createdAt)
 	return p, err
 }
 
@@ -96,6 +96,10 @@ func (q *query) UpdateProject(ctx context.Context, id int64, req dtorep.PatchPro
 		sets = append(sets, "ide_command = ?")
 		args = append(args, *req.IDECommand)
 	}
+	if req.NotifyTgDefault != nil {
+		sets = append(sets, "notify_tg_default = ?")
+		args = append(args, *req.NotifyTgDefault)
+	}
 	if len(sets) == 0 {
 		return nil
 	}
@@ -112,6 +116,33 @@ func (q *query) UpdateProject(ctx context.Context, id int64, req dtorep.PatchPro
 	}
 	if affected == 0 {
 		return fmt.Errorf("project %d: %w", id, cstmerrors.ErrNotFound)
+	}
+	return nil
+}
+
+// DeleteProjectCascade — удаление проекта со ВСЕЙ историей (раны, стадии,
+// события, гейты, заметки, артефакты) в одной транзакции через вызывающий
+// слой. Порядок — от детей к родителям (FK).
+func (q *query) DeleteProjectCascade(ctx context.Context, id int64) error {
+	// FK: events/gates/notes/artifacts ссылаются на runs; run_stages на runs
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`DELETE FROM notes WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)`, []any{id}},
+		{`DELETE FROM gates WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)`, []any{id}},
+		{`DELETE FROM artifacts WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)`, []any{id}},
+		{`DELETE FROM events WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)`, []any{id}},
+		{`DELETE FROM run_stages WHERE run_id IN (SELECT id FROM runs WHERE project_id = ?)`, []any{id}},
+		{`DELETE FROM runs WHERE project_id = ?`, []any{id}},
+		{`DELETE FROM lessons WHERE project_id = ?`, []any{id}},
+		{`DELETE FROM pipelines WHERE project_id = ?`, []any{id}},
+		{`DELETE FROM projects WHERE id = ?`, []any{id}},
+	}
+	for _, stmt := range statements {
+		if _, err := q.conn.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
+			return fmt.Errorf("failed to cascade delete project %d: %w", id, err)
+		}
 	}
 	return nil
 }

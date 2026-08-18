@@ -1,6 +1,6 @@
 # T-28 Fan-out подзадач (DAG внутри рана)
 
-Статус: todo · M4 · зависимости: T-20 (редактор), T-03 (движок)
+Статус: done (2026-08-17) · M4 · зависимости: T-20 (редактор), T-03 (движок)
 
 ## Цель
 
@@ -27,3 +27,24 @@ join-ревью.
 
 - ADR + реализация split/join для read-only веток; редактор умеет
   рисовать такие рёбра; движок корректно ждёт join.
+
+## Итог (2026-08-17)
+
+Сделано:
+- Spec: StageSpec.+parallel_group/read_only, Spec.+parallel_groups
+  [{name, on_failure: fail_fast|wait_all}]. Динамический fan-out (список
+  от LLM) НЕ реализован — зафиксировано в ADR-003.
+- Движок (runsmachine.parallelGroupAction): члены группы оцениваются
+  целиком: незапущенные стартуют по одной на тик (пул T-09 параллелит),
+  running ветка не блокирует старт остальных, join = все
+  succeeded/skipped; fail_fast → ран failed при первой failed; wait_all →
+  дождаться остальных → failed. interrupted-ветка — общий контур resume.
+- Валидация (T-21 ValidateSpec): члены существуют, read_only=true,
+  группа объявлена, on_failure известен.
+- **ADR-003** (docs/adr/003-fanout-parallel.md): параллелятся только
+  read-only ветки, пишущие этапы линейны; причины отказа от worktree
+  (D-30/D-32) и динамического fan-out.
+- Редактор: рёбра split/join — в брифе UI-агента (этот батч).
+
+Проверка: TestParallelGroupProgression (обе ветки стартуют параллельно,
+join ждёт всех), FailFast, WaitAll — зелёные с -race.

@@ -92,6 +92,10 @@ func (repoAppender) Append(ctx context.Context, tx *sql.Tx, ev dtorep.Event) err
 // --- события журнала -------------------------------------------------------
 
 const (
+	// EventKindRunCreated — создание рана (F-01, fix-task-4): пишется
+	// runsapi.CreateRun в той же транзакции, что и INSERT рана; payload —
+	// сериализованный объект рана (карточка без REST-догона).
+	EventKindRunCreated        = "run.created"
 	EventKindRunStateChanged   = "run.state_changed"
 	EventKindStageStateChanged = "stage.state_changed"
 	EventKindGateOpened        = "gate.opened"
@@ -101,6 +105,11 @@ const (
 type stateChangedPayload struct {
 	From string `json:"from"`
 	To   string `json:"to"`
+	// Данные стадии — для фронта: новая попытка (строка) должна появиться
+	// в UI по событию, без перезагрузки (баг 2026-08-18).
+	StageKey  string `json:"stage_key,omitempty"`
+	Iteration int64  `json:"iteration,omitempty"`
+	Harness   string `json:"harness,omitempty"`
 }
 
 // AppendStateEvent пишет событие смены состояния (payload {from,to}) в
@@ -114,6 +123,27 @@ func AppendStateEvent(ctx context.Context, tx *sql.Tx, a EventAppender, runID st
 	return a.Append(ctx, tx, dtorep.Event{
 		RunID:       runID,
 		StageID:     stageID,
+		Kind:        kind,
+		PayloadJSON: string(payload),
+	})
+}
+
+// AppendStageEvent — событие смены состояния СТАДИИ с её данными в payload
+// (фронт вставляет новую попытку в стор по событию, без REST-перезагрузки).
+func AppendStageEvent(ctx context.Context, tx *sql.Tx, a EventAppender, stage *dtorep.Stage, kind, from, to string) error {
+	payload, err := json.Marshal(stateChangedPayload{
+		From:      from,
+		To:        to,
+		StageKey:  stage.StageKey,
+		Iteration: stage.Iteration,
+		Harness:   stage.Harness,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal event payload: %w", err)
+	}
+	return a.Append(ctx, tx, dtorep.Event{
+		RunID:       stage.RunID,
+		StageID:     &stage.ID,
 		Kind:        kind,
 		PayloadJSON: string(payload),
 	})
@@ -200,7 +230,7 @@ func (m *Machine) TransitionStage(ctx context.Context, stageID int64, to dtorep.
 			return fmt.Errorf("stage %d: %w", stageID, cstmerrors.ErrConcurrentModification)
 		}
 
-		return AppendStateEvent(ctx, tx, m.appender, stage.RunID, &stageID,
+		return AppendStageEvent(ctx, tx, m.appender, stage,
 			EventKindStageStateChanged, string(stage.State), string(to))
 	})
 }
@@ -237,7 +267,7 @@ func (m *Machine) StartStage(ctx context.Context, runID, stageKey, harness strin
 			return fmt.Errorf("failed to load created stage: %w", err)
 		}
 
-		return AppendStateEvent(ctx, tx, m.appender, runID, &id,
+		return AppendStageEvent(ctx, tx, m.appender, created,
 			EventKindStageStateChanged, "", string(dtorep.StageStatePending))
 	})
 	if err != nil {
@@ -292,7 +322,7 @@ func (m *Machine) ResumeStage(ctx context.Context, stageID int64) (*dtorep.Stage
 			return fmt.Errorf("failed to load created stage: %w", err)
 		}
 
-		return AppendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
+		return AppendStageEvent(ctx, tx, m.appender, created,
 			EventKindStageStateChanged, string(dtorep.StageStateInterrupted),
 			string(dtorep.StageStatePending))
 	})
@@ -446,7 +476,17 @@ func (m *Machine) OpenGate(ctx context.Context, req OpenGateRequest) (*dtorep.Ga
 			return fmt.Errorf("failed to load created gate: %w", err)
 		}
 
-		payload, err := json.Marshal(created)
+		// payload — snake_case по контракту GatePayload (openapi): фронт
+		// вставляет гейт в стор по событию без REST (баг 2026-08-18:
+		// json.Marshal(dtorep.Gate) давал "ID" вместо "gate_id", фронт
+		// молча дропал событие — гейт появлялся только после перезагрузки)
+		payload, err := json.Marshal(map[string]any{
+			"gate_id":      created.ID,
+			"kind":         created.Kind,
+			"question":     created.Question,
+			"context_json": created.ContextJSON,
+			"stage_id":     created.StageID,
+		})
 		if err != nil {
 			return fmt.Errorf("failed to marshal gate payload: %w", err)
 		}
@@ -634,15 +674,190 @@ func (m *Machine) ReenterStage(ctx context.Context, stageID int64, message strin
 			return fmt.Errorf("failed to load created stage: %w", err)
 		}
 
-		if err := AppendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
+		if err := AppendStageEvent(ctx, tx, m.appender, created,
 			EventKindStageStateChanged, string(prev.State), string(dtorep.StageStatePending)); err != nil {
 			return err
 		}
-		return AppendStateEvent(ctx, tx, m.appender, prev.RunID, &id,
+		return AppendStageEvent(ctx, tx, m.appender, created,
 			"stage.resumed", string(prev.State), string(dtorep.StageStatePending))
 	})
 	if err != nil {
 		return nil, err
 	}
 	return created, nil
+}
+
+// ReenterStageByKey — диалоговый ре-вход этапа ПО КЛЮЧУ (fix-петля D-23,
+// T-17): попыток ещё не было — создаёт первую (iteration=1); были —
+// ре-вход последней (см. ReenterStage). message != "" → steer-заметка.
+func (m *Machine) ReenterStageByKey(ctx context.Context, runID, stageKey, message string) (*dtorep.Stage, error) {
+	latest, err := m.stages.GetLatestStage(ctx, runID, stageKey)
+	if errors.Is(err, cstmerrors.ErrNotFound) {
+		// harness первой попытки — из спеки пайплайна (иначе pending-строка
+		// незапускаема)
+		harness, err := m.stageHarness(ctx, runID, stageKey)
+		if err != nil {
+			return nil, err
+		}
+		var created *dtorep.Stage
+		err = m.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+			stagesTx := stagesrep.NewTx(tx)
+			id, err := stagesTx.CreateStage(ctx, dtorep.CreateStageRequest{
+				RunID:     runID,
+				StageKey:  stageKey,
+				Iteration: 1,
+				Harness:   harness,
+			})
+			if err != nil {
+				return err
+			}
+			if message != "" {
+				if _, err := notesrep.NewTx(tx).CreateNote(ctx, dtorep.CreateNoteRequest{
+					RunID:          runID,
+					StageID:        &id,
+					Kind:           dtorep.NoteKindSteer,
+					Text:           message,
+					IdempotencyKey: uuid.New(),
+				}); err != nil {
+					return err
+				}
+			}
+			created, err = stagesTx.GetStageByID(ctx, id)
+			if err != nil {
+				return err
+			}
+			return AppendStageEvent(ctx, tx, m.appender, created,
+				EventKindStageStateChanged, "", string(dtorep.StageStatePending))
+		})
+		if err != nil {
+			return nil, err
+		}
+		return created, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load latest stage %q: %w", stageKey, err)
+	}
+	return m.ReenterStage(ctx, latest.ID, message)
+}
+
+// stageHarness — harness этапа из спеки пайплайна рана.
+func (m *Machine) stageHarness(ctx context.Context, runID, stageKey string) (string, error) {
+	run, err := m.runs.GetRunByID(ctx, runID)
+	if err != nil {
+		return "", fmt.Errorf("failed to load run: %w", err)
+	}
+	pipeline, err := m.pipelines.GetPipelineByID(ctx, run.PipelineVersionID)
+	if err != nil {
+		return "", fmt.Errorf("failed to load pipeline: %w", err)
+	}
+	spec, err := ParseSpec(pipeline.SpecJSON)
+	if err != nil {
+		return "", err
+	}
+	for _, st := range spec.Stages {
+		if st.Key == stageKey {
+			return st.Harness, nil
+		}
+	}
+	return "", fmt.Errorf("stage %q not found in pipeline spec: %w", stageKey, cstmerrors.ErrNotFound)
+}
+
+// SkipStage — пометить этап пропущенным (условный этап, не потребовался:
+// например fixer при approved с первого ревью, T-17). Создаёт строку в
+// состоянии skipped (iteration=1), если попыток ещё не было.
+func (m *Machine) SkipStage(ctx context.Context, runID, stageKey string) error {
+	_, err := m.stages.GetLatestStage(ctx, runID, stageKey)
+	if err == nil {
+		return nil // попытки уже есть — пропускать нечего
+	}
+	if !errors.Is(err, cstmerrors.ErrNotFound) {
+		return fmt.Errorf("failed to load latest stage %q: %w", stageKey, err)
+	}
+
+	return m.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		stagesTx := stagesrep.NewTx(tx)
+		id, err := stagesTx.CreateStage(ctx, dtorep.CreateStageRequest{
+			RunID:     runID,
+			StageKey:  stageKey,
+			Iteration: 1,
+		})
+		if err != nil {
+			return err
+		}
+		ok, err := stagesTx.TransitionStageState(ctx, id,
+			dtorep.StageStatePending, dtorep.StageStateSkipped, dtorep.StageTransitionFields{})
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("stage %d: %w", id, cstmerrors.ErrConcurrentModification)
+		}
+		created, err := stagesTx.GetStageByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("failed to load created stage: %w", err)
+		}
+		return AppendStageEvent(ctx, tx, m.appender, created,
+			EventKindStageStateChanged, string(dtorep.StageStatePending), string(dtorep.StageStateSkipped))
+	})
+}
+
+// EnsureFinalGate — финальный гейт перед succeeded (T-17, D-21): если по
+// рану ещё нет резолвнутого final_review — открывает его (ран уходит в
+// waiting_gate). Возвращает true, если гейт открыт (завершение отложено).
+// Идемпотентно: approved-гейт → false (можно завершать), открытый — true.
+func (m *Machine) EnsureFinalGate(ctx context.Context, runID string) (bool, error) {
+	gates, err := m.gates.ListGatesByRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	for _, g := range gates {
+		if g.Kind != dtorep.GateKindFinalReview {
+			continue
+		}
+		switch g.State {
+		case dtorep.GateStateApproved:
+			return false, nil // финальное ревью принято — завершаем
+		case dtorep.GateStateOpen:
+			return true, nil // уже ждём пользователя
+		default:
+			// answered (comment → ре-вход этапа уже произошёл в
+			// ResolveGateAPI), rejected, expired — откроем новый ниже
+		}
+	}
+
+	// ссылка на последнюю стадию рана: comment к финальному гейту резюмит
+	// её с комментарием (универсальный механизм ResolveGateAPI, T-11)
+	var lastStageID *int64
+	stages, err := m.stages.ListStagesByRun(ctx, runID)
+	if err != nil {
+		return false, err
+	}
+	for i := range stages {
+		if lastStageID == nil || stages[i].ID > *lastStageID {
+			id := stages[i].ID
+			lastStageID = &id
+		}
+	}
+
+	_, err = m.OpenGate(ctx, OpenGateRequest{
+		RunID:       runID,
+		StageID:     lastStageID,
+		Kind:        dtorep.GateKindFinalReview,
+		Question:    "Пайплайн отработал. Принять результат?",
+		ContextJSON: `{"final":true}`,
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// LatestStage — последняя попытка этапа (удобный passthrough для хуков
+// пайплайна, T-17).
+func (m *Machine) LatestStage(ctx context.Context, runID, stageKey string) (*dtorep.Stage, error) {
+	stage, err := m.stages.GetLatestStage(ctx, runID, stageKey)
+	if err != nil {
+		return nil, err
+	}
+	return stage, nil
 }

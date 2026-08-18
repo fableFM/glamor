@@ -145,3 +145,22 @@ open → answered | approved | rejected | expired
 - *(2026-08-16, fix-task-1):* слой usecase упразднён — API-сценарии
   переехали в `internal/service/runsapi`, supervisor вернулся в
   `internal/service/supervisor`, read-фасад — `internal/service/catalog`.
+
+## Дополнение (2026-08-17, fix-task-4 F-01): событие создания рана
+
+- Добавлено событие журнала `run.created`: `runsapi.CreateRun` пишет его
+  в ТОЙ ЖЕ транзакции, что и INSERT рана (D-11 распространён на создание,
+  не только на переходы). Payload — сериализованный объект рана целиком
+  (`RunCreatedPayload` в api/openapi.yaml: id, project_id,
+  pipeline_version_id, task_text, base_branch, branch, state, depth,
+  notify_tg, created_at) — клиент строит карточку рана без REST-догона.
+- Идемпотентность (D-12): повтор по Idempotency-Key возвращает первый ран
+  и НЕ порождает второго события `run.created`.
+- Создание рана событием не является переходом стейт-машины: ран
+  появляется сразу в `draft`, таблица переходов ADR-001 не менялась.
+
+## Дополнение (2026-08-17)
+
+- `draft → stopped` разрешён: отмена рана, ещё не стартовавшего (очередь).
+  Найдено при реализации удаления проекта: stop на draft-ране возвращал
+  409 invalid_transition.

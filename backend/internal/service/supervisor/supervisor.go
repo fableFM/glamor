@@ -13,6 +13,8 @@ import (
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/events"
 	"github.com/fableFM/glamor/internal/harness"
+	artifactsrep "github.com/fableFM/glamor/internal/repository/artifacts"
+	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
 	pipelinesrep "github.com/fableFM/glamor/internal/repository/pipelines"
 	projectsrep "github.com/fableFM/glamor/internal/repository/projects"
@@ -58,6 +60,16 @@ type LaunchContext struct {
 	PrevSessionID string   // session_id предыдущей попытки (resume, D-16)
 	IsResume      bool     // auto-resume после interrupted
 	SteerMessages []string // сообщения Interrupt&Steer / queue notes (T-11)
+	// RunDir — каталог артефактов рана (~/.glamor/runs/<id>, T-17):
+	// spec.md/questions.md/verdict.json/handoff.md/prompt-*.md.
+	RunDir string
+	// ProjectPath — чекаут проекта (vendor-память локальная, T-17).
+	ProjectPath string
+	// MaxIterations — лимит fix-петли из спеки ({{max_iterations}}, T-17).
+	MaxIterations int64
+	// LessonSignals — сигналы для distill-этапа (T-29): ответы на гейтах,
+	// queue notes, комментарии ({{gate_answers}}).
+	LessonSignals string
 }
 
 // PromptBuilder собирает промпт этапа (полные промпты дефолтного пайплайна —
@@ -72,14 +84,15 @@ type PreStageHook func(ctx context.Context, run *dtorep.Run, projectPath string)
 type PostRunHook func(ctx context.Context, run *dtorep.Run, projectPath string) error
 
 // OnStageSucceeded — хук после успешного этапа (T-11: артефакт-гейты,
-// fix-петля). nil — линейное продвижение.
-type OnStageSucceeded func(ctx context.Context, run *dtorep.Run, stage *dtorep.Stage) error
+// T-17: fix-петля). nil — линейное продвижение. spec — спека пайплайна рана.
+type OnStageSucceeded func(ctx context.Context, run *dtorep.Run, stage *dtorep.Stage, spec runsmachine.Spec) error
 
 // Supervisor — контур этапов. Один экземпляр на демон.
 type Supervisor struct {
 	machine   *runsmachine.Machine
 	registry  *harness.Registry
 	journal   *events.Journal
+	cfgMu     sync.RWMutex
 	cfg       Config
 	prompt    PromptBuilder
 	preStage  PreStageHook
@@ -91,6 +104,8 @@ type Supervisor struct {
 	projects  projectsrep.RepositoryWithTX
 	pipelines pipelinesrep.RepositoryWithTX
 	notes     notesrep.RepositoryWithTX
+	artifacts artifactsrep.RepositoryWithTX
+	gates     gatesrep.RepositoryWithTX
 
 	sem chan struct{} // пул процессов (D-33)
 
@@ -108,7 +123,8 @@ func New(machine *runsmachine.Machine, registry *harness.Registry, journal *even
 	cfg Config, prompt PromptBuilder,
 	runs runsrep.RepositoryWithTX, stages stagesrep.RepositoryWithTX,
 	projects projectsrep.RepositoryWithTX, pipelines pipelinesrep.RepositoryWithTX,
-	notes notesrep.RepositoryWithTX,
+	notes notesrep.RepositoryWithTX, artifacts artifactsrep.RepositoryWithTX,
+	gates gatesrep.RepositoryWithTX,
 ) *Supervisor {
 	if prompt == nil {
 		prompt = DefaultPromptBuilder
@@ -127,6 +143,8 @@ func New(machine *runsmachine.Machine, registry *harness.Registry, journal *even
 		projects:    projects,
 		pipelines:   pipelines,
 		notes:       notes,
+		artifacts:   artifacts,
+		gates:       gates,
 		sem:         make(chan struct{}, cfg.MaxParallel),
 		procs:       map[int64]*stageProc{},
 		resumeAfter: map[int64]time.Time{},
@@ -136,13 +154,28 @@ func New(machine *runsmachine.Machine, registry *harness.Registry, journal *even
 	}
 }
 
+// SetConfig — hot-apply настроек (экран настроек UI): подменяет конфиг
+// контура на лету (watchdog/пул/backoff читаются на каждом тике).
+func (s *Supervisor) SetConfig(cfg Config) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	s.cfg = cfg
+}
+
+// GetConfig — актуальный конфиг (RLock).
+func (s *Supervisor) GetConfig() Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
+}
+
 func (s *Supervisor) SetPreStageHook(h PreStageHook)         { s.preStage = h }
 func (s *Supervisor) SetPostRunHook(h PostRunHook)           { s.postRun = h }
 func (s *Supervisor) SetOnStageSucceeded(h OnStageSucceeded) { s.onSuccess = h }
 
 // Run запускает контур (блокирует до Stop/Drain или отмены ctx).
 func (s *Supervisor) Run(ctx context.Context) error {
-	ticker := time.NewTicker(s.cfg.PollInterval)
+	ticker := time.NewTicker(s.GetConfig().PollInterval)
 	defer ticker.Stop()
 
 	for {
@@ -176,7 +209,7 @@ func (s *Supervisor) Drain(ctx context.Context) error {
 		if err := s.markStopRequested(p, "daemon"); err != nil {
 			logError(ctx, "failed to mark stop_requested_by=daemon", err)
 		}
-		p.kill(s.cfg.KillGrace)
+		p.kill(s.GetConfig().KillGrace)
 	}
 
 	close(s.stopCh)
@@ -291,6 +324,16 @@ func (s *Supervisor) processRun(ctx context.Context, run *dtorep.Run) error {
 		return err
 
 	case runsmachine.ActionFinishRun:
+		// финальный гейт перед succeeded (T-17, D-21)
+		if action.RunState == dtorep.RunStateSucceeded && action.FinalGate != "" {
+			opened, err := s.machine.EnsureFinalGate(ctx, run.ID)
+			if err != nil {
+				return err
+			}
+			if opened {
+				return nil // ждём резолва финального гейта
+			}
+		}
 		return s.machine.TransitionRun(ctx, run.ID, action.RunState)
 	}
 	return nil

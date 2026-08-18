@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"sess-broken-1","model":"claude-sonnet-4-5","cwd":"/tmp/proj"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"обрезанный на краше отв
+not json at all — garbage line in stdout
+{"type":"result","subtype":"success","is_error":false,"session_id":"sess-broken-1","result":"done"}

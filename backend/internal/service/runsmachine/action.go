@@ -25,11 +25,12 @@ const (
 
 // Action — решение движка о следующем шаге рана.
 type Action struct {
-	Kind     ActionKind
-	Stage    *dtorep.Stage   // для start/wait/resume/escalate — релевантная стадия
-	StageKey string          // для start_stage нового этапа (строки ещё нет)
-	Harness  string          // harness нового этапа из спеки
-	RunState dtorep.RunState // для finish_run — целевое терминальное состояние
+	Kind      ActionKind
+	Stage     *dtorep.Stage   // для start/wait/resume/escalate — релевантная стадия
+	StageKey  string          // для start_stage нового этапа (строки ещё нет)
+	Harness   string          // harness нового этапа из спеки
+	RunState  dtorep.RunState // для finish_run — целевое терминальное состояние
+	FinalGate string          // из спеки: гейт перед succeeded (T-17), "" = нет
 }
 
 // NextAction — чистая функция над состоянием БД: перечитывает
@@ -64,7 +65,28 @@ func (m *Machine) NextAction(ctx context.Context, runID string) (Action, error) 
 		return Action{}, err
 	}
 
-	for _, stageSpec := range spec.Stages {
+	for i := 0; i < len(spec.Stages); i++ {
+		stageSpec := spec.Stages[i]
+
+		// fan-out (T-28, ADR-003): параллельная группа оценивается целиком
+		if stageSpec.ParallelGroup != "" {
+			groupKeys := []string{}
+			for j := i; j < len(spec.Stages); j++ {
+				if spec.Stages[j].ParallelGroup == stageSpec.ParallelGroup {
+					groupKeys = append(groupKeys, spec.Stages[j].Key)
+					i = j // пропускаем членов группы в основном цикле
+				}
+			}
+			action, done, err := m.parallelGroupAction(ctx, runID, spec, stageSpec.ParallelGroup, groupKeys)
+			if err != nil {
+				return Action{}, err
+			}
+			if done {
+				continue // вся группа завершена — дальше по спеке
+			}
+			return action, nil
+		}
+
 		latest, err := m.stages.GetLatestStage(ctx, runID, stageSpec.Key)
 		if errors.Is(err, cstmerrors.ErrNotFound) {
 			return Action{
@@ -103,5 +125,85 @@ func (m *Machine) NextAction(ctx context.Context, runID string) (Action, error) 
 		}
 	}
 
-	return Action{Kind: ActionFinishRun, RunState: dtorep.RunStateSucceeded}, nil
+	return Action{Kind: ActionFinishRun, RunState: dtorep.RunStateSucceeded, FinalGate: spec.FinalGate}, nil
+}
+
+// parallelGroupAction — решение по параллельной группе веток (T-28):
+// незапущенные стартуют (по одной на тик — пул supervisor'а параллелит),
+// join — когда все succeeded/skipped; падение — по политике on_failure.
+func (m *Machine) parallelGroupAction(ctx context.Context, runID string, spec Spec, groupName string, keys []string) (Action, bool, error) {
+	onFailure := "fail_fast"
+	for _, g := range spec.ParallelGroups {
+		if g.Name == groupName && g.OnFailure != "" {
+			onFailure = g.OnFailure
+		}
+	}
+
+	var pending, running, resume *dtorep.Stage
+	var failed *dtorep.Stage
+	for _, key := range keys {
+		latest, err := m.stages.GetLatestStage(ctx, runID, key)
+		if errors.Is(err, cstmerrors.ErrNotFound) {
+			// незапущенная ветка — стартуем (создание строки на supervisor)
+			return Action{Kind: ActionStartStage, StageKey: key, Harness: stageHarnessOf(spec, key)}, false, nil
+		}
+		if err != nil {
+			return Action{}, false, fmt.Errorf("failed to load stage %q: %w", key, err)
+		}
+
+		switch latest.State {
+		case dtorep.StageStatePending:
+			if pending == nil {
+				pending = latest
+			}
+		case dtorep.StageStateRunning:
+			if running == nil {
+				running = latest
+			}
+		case dtorep.StageStateInterrupted:
+			if latest.StopRequestedBy == nil || *latest.StopRequestedBy == "" {
+				if resume == nil {
+					resume = latest
+				}
+			}
+		case dtorep.StageStateFailed:
+			if failed == nil {
+				failed = latest
+			}
+		case dtorep.StageStateSucceeded, dtorep.StageStateSkipped:
+		}
+	}
+
+	switch {
+	case failed != nil && onFailure == "fail_fast":
+		return Action{Kind: ActionFinishRun, RunState: dtorep.RunStateFailed, Stage: failed}, false, nil
+	case failed != nil: // wait_all: ждём остальные ветки
+		if pending != nil {
+			return Action{Kind: ActionStartStage, Stage: pending, StageKey: pending.StageKey, Harness: pending.Harness}, false, nil
+		}
+		if running != nil || resume != nil {
+			if resume != nil {
+				return Action{Kind: ActionResumeStage, Stage: resume}, false, nil
+			}
+			return Action{Kind: ActionWaitStage, Stage: running}, false, nil
+		}
+		return Action{Kind: ActionFinishRun, RunState: dtorep.RunStateFailed, Stage: failed}, false, nil
+	case pending != nil:
+		return Action{Kind: ActionStartStage, Stage: pending, StageKey: pending.StageKey, Harness: pending.Harness}, false, nil
+	case resume != nil:
+		return Action{Kind: ActionResumeStage, Stage: resume}, false, nil
+	case running != nil:
+		return Action{Kind: ActionWaitStage, Stage: running}, false, nil
+	default:
+		return Action{}, true, nil // вся группа succeeded/skipped — join
+	}
+}
+
+func stageHarnessOf(spec Spec, key string) string {
+	for _, st := range spec.Stages {
+		if st.Key == key {
+			return st.Harness
+		}
+	}
+	return ""
 }

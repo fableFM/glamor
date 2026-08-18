@@ -15,6 +15,7 @@ import (
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/repository"
 	eventsrep "github.com/fableFM/glamor/internal/repository/events"
+	"github.com/fableFM/glamor/internal/repository/projects"
 	"github.com/fableFM/glamor/internal/repository/runs"
 	"github.com/fableFM/glamor/internal/repository/stages"
 	"github.com/fableFM/glamor/internal/repository/testdb"
@@ -271,4 +272,59 @@ func TestTransitionRunAndStageFields(t *testing.T) {
 	assert.Equal(t, pid, *stage.PID)
 	require.NotNil(t, stage.SessionID)
 	assert.Equal(t, sessionID, *stage.SessionID)
+}
+
+// notify_tg_default (F-04, T-16): дефолт true при создании, маппинг, patch.
+func TestProjectNotifyTgDefault(t *testing.T) {
+	ctx := context.Background()
+	db := testdb.New(t)
+	repo := projects.NewRepository(db)
+
+	id, err := repo.CreateProject(ctx, dtorep.CreateProjectRequest{
+		Path: "/tmp/" + uuid.New(), Name: "p", DefaultBranch: "main",
+	})
+	require.NoError(t, err)
+
+	// дефолт из миграции — true
+	p, err := repo.GetProjectByID(ctx, id)
+	require.NoError(t, err)
+	assert.True(t, p.NotifyTgDefault)
+
+	// patch в false
+	notify := false
+	require.NoError(t, repo.UpdateProject(ctx, id, dtorep.PatchProjectRequest{NotifyTgDefault: &notify}))
+	p, err = repo.GetProjectByID(ctx, id)
+	require.NoError(t, err)
+	assert.False(t, p.NotifyTgDefault)
+
+	// patch без поля не трогает значение
+	branch := "develop"
+	require.NoError(t, repo.UpdateProject(ctx, id, dtorep.PatchProjectRequest{DefaultBranch: &branch}))
+	p, err = repo.GetProjectByID(ctx, id)
+	require.NoError(t, err)
+	assert.False(t, p.NotifyTgDefault)
+	assert.Equal(t, "develop", p.DefaultBranch)
+}
+
+// GetActiveRunByBranch (F-02): активный ран находится, терминальный — нет.
+func TestGetActiveRunByBranch(t *testing.T) {
+	ctx := context.Background()
+	db := testdb.New(t)
+	runID := testdb.SeedRun(t, db)
+	repo := runs.NewRepository(db)
+
+	run, err := repo.GetRunByID(ctx, runID)
+	require.NoError(t, err)
+
+	active, err := repo.GetActiveRunByBranch(ctx, run.ProjectID, run.Branch)
+	require.NoError(t, err)
+	assert.Equal(t, runID, active.ID)
+
+	// терминальный ран ветку не держит
+	ok, err := repo.TransitionRunState(ctx, runID, dtorep.RunStateDraft, dtorep.RunStateStopped, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	_, err = repo.GetActiveRunByBranch(ctx, run.ProjectID, run.Branch)
+	require.ErrorIs(t, err, cstmerrors.ErrNotFound)
 }

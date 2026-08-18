@@ -1,6 +1,6 @@
 # T-16 Экраны проектов, пайплайнов, создание рана
 
-Статус: todo · M1 · зависимости: T-13
+Статус: done (2026-08-17) · M1 · зависимости: T-13
 
 ## Цель
 
@@ -45,3 +45,81 @@ IA по D-60: Проекты → Проект (селектор пайплайн
 - Ошибка «грязный чекаут» показывает список мешающих файлов и кнопку
   «всё равно запустить» (force).
 - Состояния списков живые (WS), без ручного рефреша.
+
+## Итог (2026-08-17, субагент; проверено: живой смоук — проект создан
+через API, UI отдаётся, ран создаётся и останавливается)
+
+Сделано: список проектов live (активный ран с пульсом, бейдж гейтов),
+добавление проекта, инлайн-настройки (PATCH), экран проекта (табы
+пайплайнов с localStorage, раны с фильтром), форма «Новая задача»
+(depth с подсказками, ветка auto/имя/существующая + slug preview,
+notify_tg, превью этапов), сабмит с Idempotency-Key → редирект на ран,
+dirty_checkout → список файлов + force, run_locked → показ ветки.
+
+### Дополнение 2026-08-17 (fix-task-2: F-02, F-04-backend, субагент)
+
+- **F-02 (run_locked без details)**: исправлено. В `cstmerrors` добавлен
+  типизированный `RunLockedError{Branch, RunID}` (Unwrap → ErrRunLocked);
+  `runsapi.CreateRun` при lock-конфликте находит активный ран новым методом
+  репозитория `runs.GetActiveRunByBranch` (зеркало частичного
+  UNIQUE-индекса D-33) и возвращает ошибку с контекстом; контроллер маппит
+  в 409 `run_locked` с `details.branch` и `details.run_id`. HTTP-тест
+  (повторный POST /runs на занятую ветку → 409 + details) — в
+  `handlers_test.go` (расширен TestCreateRun_IdempotencyKey).
+- **F-04 (notify_tg default)**: backend-вертикаль реализована. Миграция
+  `20260817121000_notify_tg_default.go` (`projects.+notify_tg_default
+  INTEGER NOT NULL DEFAULT 1`), поле `NotifyTgDefault` (bool) в dtorep/
+  репозитории/маппере, `PatchProjectRequest.NotifyTgDefault *bool`.
+  В openapi: `Project.notify_tg_default` (boolean, optional, default true)
+  и `PatchProjectRequest.notify_tg_default` (optional boolean);
+  `make gen` обновил genapi и web/src/api/schema.d.ts. Дефолт при создании
+  — true (DEFAULT миграции; CreateProjectRequest без поля). Тесты:
+  репозиторный `TestProjectNotifyTgDefault` (дефолт/patch/не трогает поле)
+  и HTTP (create → true, patch → false) в `TestProjects_CRUD`.
+  UI (чекбокс в настройках, дефолт формы из проекта) — отдельным
+  фронт-агентом; контракт: поле ровно `notify_tg_default`, boolean,
+  optional.
+- Проверки: `go build/vet/test -race` зелёные, `make build && make test &&
+  make lint` зелёные, `make gen` идемпотентен.
+
+### Дополнение 2026-08-17 (fix-task-2: F-03, F-04-UI, F-02-UI, фронт, субагент)
+
+- **F-03 (новые раны не появляются в списках live)**: исправлено на
+  фронте. Факт по backend: отдельного события `run.created` демон не
+  шлёт (проверено по `runsmachine/machine.go` и `runsapi` — события
+  только run.state_changed/stage.*/gate.*/stream.*), поэтому в dispatch
+  (`lib/dispatch.ts`) добавлен `ensureRunKnown`: на ЛЮБОЕ live run.*-событие
+  с неизвестным run_id карточка догоняется REST'ом (`getRun`) и upsert'ится
+  в runs/runDetails сторы; replay-фаза не догоняется (начальный
+  REST-снапшот списков её покрывает — защита от fetch-шторма), параллельные
+  события одного рана дедупятся. Бейдж активного рана в списке проектов
+  обновляется тем же путём (derive из runs-стора). Тесты —
+  `lib/dispatch.test.ts` (4 шт., getRun мокается).
+- **F-04 UI (notify_tg_default)**: чекбокс «notify_tg по умолчанию для
+  новых ранов» в инлайн-настройках проекта (PATCH `notify_tg_default`),
+  дефолт чекбокса notify_tg в NewRunForm — `project.notify_tg_default`
+  вместо хардкода `useState(true)`.
+- **F-02-UI**: форма читает `details.branch` — контракт совпадает
+  (snake_case `{branch, run_id}`); добавлен показ `details.run_id`
+  ссылкой на активный ран, держащий ветку.
+- Проверки: `npx vitest run` (32/32), `npm run build`, `npm run lint` —
+  зелёные.
+
+### Дополнение 2026-08-17 (fix-task-2: П.5, П.3, фронт, субагент)
+
+- **П.5 (табы пайплайнов по версиям) — решение**: таб = пайплайн (имя),
+  внутри таба — переключатель версии (`<select>`, виден только когда
+  версий > 1; пометка «(последняя)»). Клик по табу активирует последнюю
+  версию; раны по-прежнему фильтруются строго по выбранной версии
+  (pipeline_version_id) — старые раны доступны переключением версии, что
+  и требовал бриф. Условие «показывать переключатель, только если есть
+  раны старых версий» не реализовано: фронт не знает о ранах старых
+  версий без доп. запросов — переключатель показывается по числу версий
+  (проще и без лишних fetch'ей). localStorage помнит выбранную версию,
+  как раньше. Группировка — чистая `groupPipelinesByName` в
+  `lib/pipelines.ts` (vitest, 4 шт.).
+- **П.3**: фоновый `listRuns` — console.error + красная строка
+  «не удалось загрузить раны» над списком (`runsError`), экран не
+  заменяется ошибкой.
+- Проверки: `npx vitest run` (52/52), `npm run build`, `npm run lint` —
+  зелёные.

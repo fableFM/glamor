@@ -51,6 +51,20 @@ func (s *Supervisor) launchStage(ctx context.Context, run *dtorep.Run, stage *dt
 		}
 		s.mu.Unlock()
 
+		// janitor-нода (T-22): детерминированные команды без harness
+		if stageSpec, err := s.stageSpecFor(ctx, stage); err == nil && stageSpec.Kind == "janitor" {
+			project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
+			if err != nil {
+				logError(ctx, fmt.Sprintf("failed to load project for janitor stage %d", stage.ID), err)
+				s.failStage(ctx, stage, fmt.Sprintf("load project failed: %v", err))
+				return
+			}
+			if err := s.runJanitor(ctx, run, stage, stageSpec, project.Path); err != nil {
+				logError(ctx, fmt.Sprintf("janitor stage %d failed", stage.ID), err)
+			}
+			return
+		}
+
 		proc, err := s.spawnStage(ctx, run, stage)
 		if err != nil {
 			logError(ctx, fmt.Sprintf("failed to spawn stage %d", stage.ID), err)
@@ -150,12 +164,18 @@ func (s *Supervisor) classify(ctx context.Context, result stageResult) error {
 			if err != nil {
 				return err
 			}
+			// регистрация артефакта этапа (D-13, виден в UI)
+			s.registerStageArtifact(ctx, run, stage)
 			// диалоговый протокол (D-20/21): артефакт-гейты до продвижения
 			if err := s.handlePostStageGates(ctx, run, stage); err != nil {
 				return err
 			}
 			if s.onSuccess != nil {
-				return s.onSuccess(ctx, run, stage)
+				spec, err := s.specFor(ctx, stage.RunID)
+				if err != nil {
+					return err
+				}
+				return s.onSuccess(ctx, run, stage, spec)
 			}
 			return nil
 		}
@@ -180,13 +200,13 @@ func (s *Supervisor) classify(ctx context.Context, result stageResult) error {
 // scheduleAutoResume — политика auto-resume (D-14): backoff 30s→2m→5m,
 // исчерпание → эскалация-гейт (NextAction → ActionEscalate на тике).
 func (s *Supervisor) scheduleAutoResume(ctx context.Context, stage *dtorep.Stage) error {
-	if stage.ResumeCount >= s.cfg.MaxAutoResumes {
+	if stage.ResumeCount >= s.GetConfig().MaxAutoResumes {
 		return nil // NextAction вернёт escalate на следующем тике
 	}
 
-	delay := s.cfg.Backoff[0]
-	if int(stage.ResumeCount) < len(s.cfg.Backoff) {
-		delay = s.cfg.Backoff[stage.ResumeCount]
+	delay := s.GetConfig().Backoff[0]
+	if int(stage.ResumeCount) < len(s.GetConfig().Backoff) {
+		delay = s.GetConfig().Backoff[stage.ResumeCount]
 	}
 
 	s.mu.Lock()
@@ -255,7 +275,7 @@ func (s *Supervisor) reconcileProcs(ctx context.Context) {
 			continue
 		}
 		if stage.State != dtorep.StageStateRunning {
-			p.kill(s.cfg.KillGrace)
+			p.kill(s.GetConfig().KillGrace)
 		}
 	}
 }
@@ -286,24 +306,50 @@ func (s *Supervisor) checkArtifact(ctx context.Context, stage *dtorep.Stage) (bo
 	}
 	_ = run
 
-	info, err := statFile(joinPath(project.Path, spec.Artifact.Path))
-	if err != nil {
-		return false, nil // файла нет
+	path := expandPath(spec.Artifact.Path, stage.RunID, s.runDir(stage.RunID))
+	info, err := statFile(joinPath(project.Path, path))
+	if err == nil && info.Size() > 0 {
+		return true, nil
 	}
-	return info.Size() > 0, nil
+
+	// D-20: «вопросы как артефакт» — этап с questions_path, записавший
+	// непустые вопросы, завершился штатно и БЕЗ основного артефакта:
+	// это валидный исход попытки (далее handlePostStageGates откроет
+	// гейт question), а не провал. Поймано на живом ране 2026-08-17.
+	if spec.QuestionsPath != "" {
+		qpath := expandPath(spec.QuestionsPath, stage.RunID, s.runDir(stage.RunID))
+		if qinfo, qerr := statFile(joinPath(project.Path, qpath)); qerr == nil && qinfo.Size() > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// runDir — каталог артефактов рана (~/.glamor/runs/<id>, T-17).
+func (s *Supervisor) runDir(runID string) string {
+	return joinPath(s.GetConfig().RunsDir, runID)
+}
+
+// specFor — спека пайплайна рана.
+func (s *Supervisor) specFor(ctx context.Context, runID string) (runsmachine.Spec, error) {
+	run, err := s.runs.GetRunByID(ctx, runID)
+	if err != nil {
+		return runsmachine.Spec{}, err
+	}
+	pipeline, err := s.pipelines.GetPipelineByID(ctx, run.PipelineVersionID)
+	if err != nil {
+		return runsmachine.Spec{}, err
+	}
+	spec, err := runsmachine.ParseSpec(pipeline.SpecJSON)
+	if err != nil {
+		return runsmachine.Spec{}, err
+	}
+	return spec, nil
 }
 
 // stageSpecFor — спека этапа из пайплайна рана (модель/effort/артефакт).
 func (s *Supervisor) stageSpecFor(ctx context.Context, stage *dtorep.Stage) (runsmachine.StageSpec, error) {
-	run, err := s.runs.GetRunByID(ctx, stage.RunID)
-	if err != nil {
-		return runsmachine.StageSpec{}, err
-	}
-	pipeline, err := s.pipelines.GetPipelineByID(ctx, run.PipelineVersionID)
-	if err != nil {
-		return runsmachine.StageSpec{}, err
-	}
-	spec, err := runsmachine.ParseSpec(pipeline.SpecJSON)
+	spec, err := s.specFor(ctx, stage.RunID)
 	if err != nil {
 		return runsmachine.StageSpec{}, err
 	}
@@ -353,4 +399,21 @@ func marshalEventPayload(v any) string {
 		return `{"error":"payload marshal failed"}`
 	}
 	return string(data)
+}
+
+// registerStageArtifact регистрирует файл-артефакт этапа в БД (best-effort).
+func (s *Supervisor) registerStageArtifact(ctx context.Context, run *dtorep.Run, stage *dtorep.Stage) {
+	spec, err := s.stageSpecFor(ctx, stage)
+	if err != nil || spec.Artifact == nil {
+		return
+	}
+	path := expandPath(spec.Artifact.Path, run.ID, s.runDir(run.ID))
+	if _, err := s.artifacts.CreateArtifact(ctx, dtorep.CreateArtifactRequest{
+		RunID:   run.ID,
+		StageID: &stage.ID,
+		Path:    path,
+		Kind:    "stage_output",
+	}); err != nil {
+		logError(ctx, "failed to register stage artifact", err)
+	}
 }

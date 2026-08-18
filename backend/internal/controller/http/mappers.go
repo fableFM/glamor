@@ -14,12 +14,13 @@ import (
 
 func mapProject(p *dtorep.Project) genapi.Project {
 	return genapi.Project{
-		Id:            p.ID,
-		Path:          p.Path,
-		Name:          p.Name,
-		DefaultBranch: p.DefaultBranch,
-		IdeCommand:    p.IDECommand,
-		CreatedAt:     p.CreatedAt,
+		Id:              p.ID,
+		Path:            p.Path,
+		Name:            p.Name,
+		DefaultBranch:   p.DefaultBranch,
+		IdeCommand:      p.IDECommand,
+		NotifyTgDefault: &p.NotifyTgDefault,
+		CreatedAt:       p.CreatedAt,
 	}
 }
 

@@ -14,7 +14,10 @@ import (
 // (в тестах это обязано проверяться явно).
 
 var runTransitions = map[dtorep.RunState][]dtorep.RunState{
-	dtorep.RunStateDraft: {dtorep.RunStateRunning},
+	dtorep.RunStateDraft: {
+		dtorep.RunStateRunning,
+		dtorep.RunStateStopped, // отмена рана до старта (ADR-001 доп. 2026-08-17)
+	},
 	dtorep.RunStateRunning: {
 		dtorep.RunStateWaitingGate,
 		dtorep.RunStateSucceeded,
@@ -35,6 +38,7 @@ var stageTransitions = map[dtorep.StageState][]dtorep.StageState{
 	dtorep.StageStatePending: {
 		dtorep.StageStateRunning,
 		dtorep.StageStateSkipped, // условные этапы (пост-M1, в enum сразу)
+		dtorep.StageStateFailed,  // spawn failure (процесс не запустился, T-17)
 	},
 	dtorep.StageStateRunning: {
 		dtorep.StageStateSucceeded,

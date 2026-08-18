@@ -3,12 +3,18 @@ package http
 import (
 	"context"
 	"errors"
+	"net/http"
+	"strings"
 	"sync/atomic"
 
 	"github.com/fableFM/glamor/internal/controller/http/genapi"
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/service/catalog"
+	"github.com/fableFM/glamor/internal/service/lessons"
+	"github.com/fableFM/glamor/internal/service/pipeline"
 	"github.com/fableFM/glamor/internal/service/runsapi"
+	"github.com/fableFM/glamor/internal/service/settings"
+	"github.com/fableFM/glamor/internal/service/vendormemory"
 )
 
 // handlers — реализация genapi.StrictServerInterface.
@@ -16,6 +22,11 @@ type handlers struct {
 	draining  *atomic.Bool
 	machine   Machine
 	api       *catalog.Service
+	pipelines *pipeline.Service
+	memory    *vendormemory.Service
+	lessons   *lessons.Service
+	telegram  TelegramPairer
+	settings  *settings.Service
 	version   string
 	harnesses []string
 }
@@ -78,21 +89,23 @@ func (h *handlers) GetProject(ctx context.Context, req genapi.GetProjectRequestO
 
 	p := mapProject(detail.Project)
 	return genapi.GetProject200JSONResponse(genapi.ProjectDetail{
-		Id:            p.Id,
-		Path:          p.Path,
-		Name:          p.Name,
-		DefaultBranch: p.DefaultBranch,
-		IdeCommand:    p.IdeCommand,
-		CreatedAt:     p.CreatedAt,
-		ActiveRuns:    mapSlice(detail.ActiveRuns, mapRun),
-		OpenGates:     detail.OpenGates,
+		Id:              p.Id,
+		Path:            p.Path,
+		Name:            p.Name,
+		DefaultBranch:   p.DefaultBranch,
+		IdeCommand:      p.IdeCommand,
+		NotifyTgDefault: p.NotifyTgDefault,
+		CreatedAt:       p.CreatedAt,
+		ActiveRuns:      mapSlice(detail.ActiveRuns, mapRun),
+		OpenGates:       detail.OpenGates,
 	}), nil
 }
 
 func (h *handlers) PatchProject(ctx context.Context, req genapi.PatchProjectRequestObject) (genapi.PatchProjectResponseObject, error) {
 	project, err := h.api.PatchProject(ctx, req.Id, dtorep.PatchProjectRequest{
-		DefaultBranch: req.Body.DefaultBranch,
-		IDECommand:    req.Body.IdeCommand,
+		DefaultBranch:   req.Body.DefaultBranch,
+		IDECommand:      req.Body.IdeCommand,
+		NotifyTgDefault: req.Body.NotifyTgDefault,
 	})
 	if err != nil {
 		e, status := errorToResponse(err)
@@ -271,6 +284,26 @@ func (h *handlers) ResolveGate(ctx context.Context, req genapi.ResolveGateReques
 	}), nil
 }
 
+// --- telegram ------------------------------------------------------------------
+
+// PairTelegram — привязка TG-чата по коду из /start (T-19): один вызов
+// entry point'а адаптера; доменные ошибки — через errorToResponse.
+func (h *handlers) PairTelegram(ctx context.Context, req genapi.PairTelegramRequestObject) (genapi.PairTelegramResponseObject, error) {
+	if h.telegram == nil {
+		return genapi.PairTelegramdefaultJSONResponse{
+			Body:       genapi.Error{Code: "not_found", Message: "telegram adapter is not enabled"},
+			StatusCode: 404,
+		}, nil
+	}
+
+	chatID, err := h.telegram.PairByCode(ctx, req.Body.Code)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.PairTelegramdefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.PairTelegram200JSONResponse(genapi.PairTelegramResponse{ChatId: chatID}), nil
+}
+
 // --- events ------------------------------------------------------------------
 
 func (h *handlers) ListRunEvents(ctx context.Context, req genapi.ListRunEventsRequestObject) (genapi.ListRunEventsResponseObject, error) {
@@ -291,6 +324,20 @@ func (h *handlers) ListRunEvents(ctx context.Context, req genapi.ListRunEventsRe
 	return genapi.ListRunEvents200JSONResponse(mapSlice(evs, mapEvent)), nil
 }
 
+// --- artifact content (F-02, fix-task-4) --------------------------------------
+
+func (h *handlers) GetArtifactContent(ctx context.Context, req genapi.GetArtifactContentRequestObject) (genapi.GetArtifactContentResponseObject, error) {
+	content, err := h.api.GetArtifactContent(ctx, req.Id, req.ArtifactId)
+	if err != nil {
+		e, status := errorToResponse(err)
+		if status == http.StatusRequestEntityTooLarge {
+			return genapi.GetArtifactContent413JSONResponse(e), nil
+		}
+		return genapi.GetArtifactContentdefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.GetArtifactContent200TextResponse(string(content.Content)), nil
+}
+
 // --- helpers -----------------------------------------------------------------
 
 func deref[T any](p *T) T {
@@ -306,4 +353,103 @@ func derefDefault[T any](p *T, def T) T {
 		return def
 	}
 	return *p
+}
+
+// --- pipelines CRUD/versions/import-export (T-21) ----------------------------
+
+func (h *handlers) CreatePipeline(ctx context.Context, req genapi.CreatePipelineRequestObject) (genapi.CreatePipelineResponseObject, error) {
+	p, err := h.pipelines.CreatePipeline(ctx, req.Body.ProjectId, req.Body.Name, req.Body.SpecJson)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.CreatePipelinedefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.CreatePipeline201JSONResponse(mapPipeline(p)), nil
+}
+
+func (h *handlers) ImportPipeline(ctx context.Context, req genapi.ImportPipelineRequestObject) (genapi.ImportPipelineResponseObject, error) {
+	onConflict := pipeline.ImportNew
+	if req.Body.OnConflict != nil {
+		onConflict = pipeline.ImportConflict(*req.Body.OnConflict)
+	}
+
+	p, err := h.pipelines.ImportYAML(ctx, req.Body.Yaml, onConflict)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.ImportPipelinedefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.ImportPipeline201JSONResponse(mapPipeline(p)), nil
+}
+
+func (h *handlers) ListPipelineVersions(ctx context.Context, req genapi.ListPipelineVersionsRequestObject) (genapi.ListPipelineVersionsResponseObject, error) {
+	versions, err := h.api.ListPipelineVersions(ctx, req.Id)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.ListPipelineVersionsdefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.ListPipelineVersions200JSONResponse(mapSlice(versions, mapPipeline)), nil
+}
+
+func (h *handlers) CreatePipelineVersion(ctx context.Context, req genapi.CreatePipelineVersionRequestObject) (genapi.CreatePipelineVersionResponseObject, error) {
+	p, err := h.pipelines.CreatePipelineVersion(ctx, req.Id, req.Body.SpecJson)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.CreatePipelineVersiondefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.CreatePipelineVersion201JSONResponse(mapPipeline(p)), nil
+}
+
+func (h *handlers) GetPipelineVersion(ctx context.Context, req genapi.GetPipelineVersionRequestObject) (genapi.GetPipelineVersionResponseObject, error) {
+	p, err := h.api.GetPipelineVersion(ctx, req.Vid)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.GetPipelineVersiondefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.GetPipelineVersion200JSONResponse(mapPipeline(p)), nil
+}
+
+func (h *handlers) ExportPipelineVersion(ctx context.Context, req genapi.ExportPipelineVersionRequestObject) (genapi.ExportPipelineVersionResponseObject, error) {
+	yamlData, err := h.pipelines.ExportYAML(ctx, req.Vid)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.ExportPipelineVersiondefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.ExportPipelineVersion200TextyamlResponse{Body: strings.NewReader(yamlData)}, nil
+}
+
+// FsBrowse — листинг подкаталогов для выбора папки проекта (T-16).
+func (h *handlers) FsBrowse(_ context.Context, req genapi.FsBrowseRequestObject) (genapi.FsBrowseResponseObject, error) {
+	var path string
+	if req.Params.Path != nil {
+		path = *req.Params.Path
+	}
+
+	parent, dirs, err := h.api.BrowseDir(path)
+	if err != nil {
+		e, status := errorToResponse(err)
+		return genapi.FsBrowsedefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+
+	resp := genapi.FsBrowse200JSONResponse{Path: path, Parent: parent}
+	for _, d := range dirs {
+		resp.Dirs = append(resp.Dirs, struct {
+			IsGitRepo bool   `json:"is_git_repo"`
+			Name      string `json:"name"`
+			Path      string `json:"path"`
+		}{
+			Name:      d.Name,
+			Path:      d.Path,
+			IsGitRepo: d.IsGitRepo,
+		})
+	}
+	return resp, nil
+}
+
+// DeleteProject — каскадное удаление проекта (необратимо; активные раны
+// надо остановить заранее — 400 validation иначе).
+func (h *handlers) DeleteProject(ctx context.Context, req genapi.DeleteProjectRequestObject) (genapi.DeleteProjectResponseObject, error) {
+	if err := h.api.DeleteProject(ctx, req.Id); err != nil {
+		e, status := errorToResponse(err)
+		return genapi.DeleteProjectdefaultJSONResponse{Body: e, StatusCode: status}, nil
+	}
+	return genapi.DeleteProject200JSONResponse{Deleted: &[]bool{true}[0]}, nil
 }

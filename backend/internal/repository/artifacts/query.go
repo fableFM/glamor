@@ -64,6 +64,17 @@ func (q *query) CreateArtifact(ctx context.Context, req dtorep.CreateArtifactReq
 	return id, nil
 }
 
+func (q *query) GetArtifactByID(ctx context.Context, id int64) (*dtorep.Artifact, error) {
+	row := q.conn.QueryRowContext(ctx,
+		`SELECT `+artifactColumns+` FROM artifacts WHERE id = ?`, id)
+	a, err := scanArtifact(row)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get artifact by id: %w", store.MapError(err))
+	}
+	dto := mapArtifactToDTO(a)
+	return &dto, nil
+}
+
 func (q *query) ListArtifactsByRun(ctx context.Context, runID string) ([]dtorep.Artifact, error) {
 	return q.listArtifacts(ctx, `SELECT `+artifactColumns+` FROM artifacts WHERE run_id = ? ORDER BY id`, runID)
 }

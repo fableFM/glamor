@@ -6,3 +6,5 @@ node_modules/
 *.db-shm
 .cache/
 .idea/
+.run/
+src-tauri/target

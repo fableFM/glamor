@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "glamor",
+  "version": "0.1.0",
+  "identifier": "fm.fable.glamor",
+  "build": {
+    "frontendDist": "../web/dist",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeDevCommand": "npm run dev --prefix web -- --port 5173 --strictPort",
+    "beforeBuildCommand": "npm run build --prefix web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "glamor",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "app",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ],
+    "externalBin": [
+      "binaries/glamord"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

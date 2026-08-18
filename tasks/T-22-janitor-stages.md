@@ -1,6 +1,6 @@
 # T-22 Janitor-этапы (build/lint/test без LLM)
 
-Статус: todo · M2 · зависимости: T-09 (supervisor), T-20 (тип ноды)
+Статус: done (2026-08-17) · M2 · зависимости: T-09 (supervisor), T-20 (тип ноды)
 
 ## Цель
 
@@ -33,3 +33,23 @@
 - Пайплайн code → janitor(go build+test) → review работает; падение
   тестов → fixer получает лог → фикс → повтор.
 - Время и exit codes видны в метриках этапа.
+
+## Итог (2026-08-17)
+
+Сделано:
+- StageSpec: kind="janitor" + `commands` []string, `on_fail`
+  (fail_stage|warn), `command_timeout_sec` (дефолт 10m).
+- supervisor.runJanitor: команды через sh -c в чекауте проекта (process
+  group + таймаут), вывод построчно → stream.text события (батчер) +
+  лог `{run_dir}/janitor.log` (фикс. имя — плейсхолдер
+  {{artifact.janitor.log}} для следующих этапов); лог регистрируется
+  артефактом kind=janitor_log; exit!=0 → fail_stage (дефолт) или warn
+  (stream.error + продолжение). Без harness — ветка в launchStage.
+- Безопасность: команды только из конфигурации пайплайна (доверенная),
+  зафиксировано в spec.go комментарием.
+- UI-редактор: janitor-нода включается в палитре — в брифе UI-агента
+  (T-20 делал её disabled; включение + поле commands — UI-батч).
+
+Проверка: TestJanitorSuccess (лог+артефакт+exit 0), TestJanitorFailStage
+(exit 3 → failed, ран failed), TestJanitorWarn (warn → succeeded) —
+все с -race зелёные.

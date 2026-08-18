@@ -6,10 +6,41 @@ import (
 )
 
 // Spec — спецификация пайплайна (pipelines.spec_json). Полная схема
-// (гейты, loop-рёбра, janitor) определяется в T-17/T-20; машине для
-// линейного продвижения достаточно упорядоченного списка этапов.
+// (janitor, сложные рёбра) — T-20/T-22; для M1: упорядоченные этапы +
+// одна fix-петля + финальный гейт (T-17).
 type Spec struct {
 	Stages []StageSpec `json:"stages"`
+	// Loop — fix-петля (D-23): verdict этапа From == changes_required →
+	// ре-вход To (fixer), затем снова From; исчерпание MaxIters →
+	// эскалация-гейт. Вычисляется pipeline-хуком supervisor'а (T-17).
+	Loop *LoopSpec `json:"loop,omitempty"`
+	// FinalGate — гейт перед терминальным succeeded (final_review, D-21).
+	FinalGate string `json:"final_gate,omitempty"`
+	// ReviewPolicy — строгость fix-петли (D-23): "blocking" (только
+	// blocking), "major" (blocking+major, дефолт), "all" (любой finding
+	// → changes_required). Сравнивается со severity findings verdict.json.
+	ReviewPolicy string `json:"review_policy,omitempty"`
+	// MemoryScope — политика записи vendor-памяти (T-23): "auto" (дефолт:
+	// локальная+глобальная) | "gate" (только локальная, промоушн кнопкой).
+	MemoryScope string `json:"memory_scope,omitempty"`
+	// ParallelGroups — fan-out ветки (T-28): группы этапов, выполняемых
+	// параллельно (только read_only этапы, ADR-003).
+	ParallelGroups []ParallelGroupSpec `json:"parallel_groups,omitempty"`
+}
+
+// ParallelGroupSpec — группа параллельных веток (T-28, ADR-003).
+type ParallelGroupSpec struct {
+	Name string `json:"name"`
+	// OnFailure — политика при падении ветки: "fail_fast" (дефолт: первая
+	// failed → ран failed) | "wait_all" (дождаться остальных → failed).
+	OnFailure string `json:"on_failure,omitempty"`
+}
+
+// LoopSpec — ребро fix-петли (D-23, T-17).
+type LoopSpec struct {
+	From     string `json:"from"` // этап с verdict-артефактом (reviewer)
+	To       string `json:"to"`   // этап исправлений (fixer)
+	MaxIters int64  `json:"max_iters"`
 }
 
 // StageSpec — описание одного этапа пайплайна.
@@ -29,6 +60,26 @@ type StageSpec struct {
 	// GateAfter — гейт после успешного этапа БЕЗ вопросов
 	// (plan_approval/final_review/...), T-11.
 	GateAfter string `json:"gate_after,omitempty"`
+	// PromptTemplate — inline-шаблон промпта этапа (T-17), плейсхолдеры
+	// {{task}}, {{artifact.X}}, {{depth}}, {{verdict}}, ... (рендер —
+	// internal/service/pipeline).
+	PromptTemplate string `json:"prompt_template,omitempty"`
+
+	// --- janitor-нода (kind="janitor", T-22): детерминированные команды ---
+	// Commands — список shell-команд (доверенная конфигурация пайплайна,
+	// НЕ вывод LLM — ядро никогда не исполняет строки модели).
+	Commands []string `json:"commands,omitempty"`
+	// OnFail — политика при ненулевом exit: "fail_stage" (дефолт) | "warn".
+	OnFail string `json:"on_fail,omitempty"`
+	// CommandTimeoutSec — таймаут одной команды (0 → дефолт supervisor'а).
+	CommandTimeoutSec int `json:"command_timeout_sec,omitempty"`
+
+	// ParallelGroup — имя группы параллельного выполнения (T-28);
+	// пусто — обычный линейный этап.
+	ParallelGroup string `json:"parallel_group,omitempty"`
+	// ReadOnly — этап не пишет в чекаут (исследование/планирование);
+	// обязателен для параллельных этапов (ADR-003).
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 // ArtifactRef — ссылка на обязательный артефакт этапа в спеке пайплайна.

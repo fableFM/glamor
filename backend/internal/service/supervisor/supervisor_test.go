@@ -16,6 +16,7 @@ import (
 	"github.com/fableFM/glamor/internal/events"
 	"github.com/fableFM/glamor/internal/harness"
 	"github.com/fableFM/glamor/internal/repository"
+	artifactsrep "github.com/fableFM/glamor/internal/repository/artifacts"
 	eventsrep "github.com/fableFM/glamor/internal/repository/events"
 	gatesrep "github.com/fableFM/glamor/internal/repository/gates"
 	notesrep "github.com/fableFM/glamor/internal/repository/notes"
@@ -86,17 +87,18 @@ func (f fakeAdapter) ExtractSessionID(evs []harness.Event, _ string) (string, er
 // --- fixture ---------------------------------------------------------------
 
 type fixture struct {
-	sup     *supervisor.Supervisor
-	machine *runsmachine.Machine
-	runsSvc *runsapi.Service
-	journal *events.Journal
-	runID   string
-	workDir string
-	runsDir string
-	stages  stagesrep.RepositoryWithTX
-	runs    runsrep.RepositoryWithTX
-	gates   gatesrep.RepositoryWithTX
-	notes   notesrep.RepositoryWithTX
+	sup       *supervisor.Supervisor
+	machine   *runsmachine.Machine
+	runsSvc   *runsapi.Service
+	journal   *events.Journal
+	runID     string
+	workDir   string
+	runsDir   string
+	stages    stagesrep.RepositoryWithTX
+	runs      runsrep.RepositoryWithTX
+	gates     gatesrep.RepositoryWithTX
+	notes     notesrep.RepositoryWithTX
+	artifacts artifactsrep.RepositoryWithTX
 }
 
 func newFixture(t *testing.T, script, specJSON string, mutateCfg func(*supervisor.Config)) *fixture {
@@ -160,7 +162,7 @@ func newFixture(t *testing.T, script, specJSON string, mutateCfg func(*superviso
 	sup := supervisor.New(machine, registry, journal, cfg, nil,
 		runsrep.NewRepository(db), stagesrep.NewRepository(db),
 		projectsrep.NewRepository(db), pipelinesrep.NewRepository(db),
-		notesrep.NewRepository(db))
+		notesrep.NewRepository(db), artifactsrep.NewRepository(db), gatesrep.NewRepository(db))
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -176,10 +178,11 @@ func newFixture(t *testing.T, script, specJSON string, mutateCfg func(*superviso
 	return &fixture{
 		sup: sup, machine: machine, runsSvc: runsSvc, journal: journal,
 		runID: run.ID, workDir: workDir, runsDir: runsDir,
-		stages: stagesrep.NewRepository(db),
-		runs:   runsrep.NewRepository(db),
-		gates:  gatesrep.NewRepository(db),
-		notes:  notesrep.NewRepository(db),
+		stages:    stagesrep.NewRepository(db),
+		runs:      runsrep.NewRepository(db),
+		gates:     gatesrep.NewRepository(db),
+		notes:     notesrep.NewRepository(db),
+		artifacts: artifactsrep.NewRepository(db),
 	}
 }
 
@@ -225,8 +228,9 @@ func TestStageSuccess(t *testing.T) {
 	assert.Equal(t, dtorep.StageStateSucceeded, stage.State)
 	require.NotNil(t, stage.SessionID)
 	assert.Equal(t, "fake-session-1", *stage.SessionID)
-	assert.Equal(t, int64(100), stage.TokensIn)
-	assert.Equal(t, int64(50), stage.TokensOut)
+	// T-24: накопление usage-событий (100+7 / 50+3)
+	assert.Equal(t, int64(107), stage.TokensIn)
+	assert.Equal(t, int64(53), stage.TokensOut)
 
 	// лог попытки содержит сырой выхлоп (receipts)
 	logPath := filepath.Join(f.runsDir, f.runID, "stage-plan-1.log")
