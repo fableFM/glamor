@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -41,17 +42,26 @@ type Service struct {
 	preflight        PreflightFunc
 	branchNamer      BranchNamerFunc
 	lessonsFinalizer LessonsFinalizer
+	outcomeHook      func(ctx context.Context, runID string) // T-30: approve финального гейта
 }
 
-// LessonsFinalizer — резолв-эффекты гейта lesson_review (T-29);
-// реализация — internal/service/lessons.GateFinalizer.
+// LessonsFinalizer — резолв-эффекты гейта lesson_review (T-29; per-card
+// резолв — T-30); реализация — internal/service/lessons.GateFinalizer.
+// sel == nil → «всё или ничего» (обратная совместимость).
 type LessonsFinalizer interface {
-	FinalizeLessonGate(ctx context.Context, gate *dtorep.Gate, action string, text *string) error
+	FinalizeLessonGate(ctx context.Context, gate *dtorep.Gate, action string, text *string, sel *dtorep.LessonOpSelection) error
 }
 
 // SetLessonsFinalizer подключает контур уроков (T-29).
 func (u *Service) SetLessonsFinalizer(f LessonsFinalizer) {
 	u.lessonsFinalizer = f
+}
+
+// SetOutcomeHook — хук успешного исхода (T-30, outcome-трекинг уроков):
+// вызывается после approve финального гейта. Сигнатура без ошибки:
+// счётчики — best-effort телеметрия, резолв гейта не отменяется.
+func (u *Service) SetOutcomeHook(fn func(ctx context.Context, runID string)) {
+	u.outcomeHook = fn
 }
 
 // New собирает сценарии из готовых зависимостей (ручной DI в main, D-80).
@@ -368,8 +378,9 @@ func mapGateAction(action GateAction) (dtorep.GateState, error) {
 // ResolveGateAPI — резолв гейта с API-семантикой идемпотентности:
 // гейт уже резолвнут ТЕМ ЖЕ резолюшном → (gate, alreadyResolved=true, nil);
 // другим → ErrGateAlreadyResolved (409). Возвращает актуальное состояние
-// гейта (контроллеру не нужно перечитывать репозиторий).
-func (u *Service) ResolveGateAPI(ctx context.Context, gateID string, action GateAction, text *string) (gate *dtorep.Gate, alreadyResolved bool, err error) {
+// гейта (контроллеру не нужно перечитывать репозиторий). sel — per-card
+// резолв гейта lesson_review (T-30; nil = «всё или ничего»).
+func (u *Service) ResolveGateAPI(ctx context.Context, gateID string, action GateAction, text *string, sel *dtorep.LessonOpSelection) (gate *dtorep.Gate, alreadyResolved bool, err error) {
 	resolution, err := mapGateAction(action)
 	if err != nil {
 		return nil, false, err
@@ -395,8 +406,16 @@ func (u *Service) ResolveGateAPI(ctx context.Context, gateID string, action Gate
 	// Гейт «Сохранить урок?» (T-29, D-52): применяем решение к черновикам;
 	// ре-вход этапа НЕ делаем — это не диалог с этапом.
 	if gate.Kind == dtorep.GateKindLessonReview && u.lessonsFinalizer != nil {
-		if err := u.lessonsFinalizer.FinalizeLessonGate(ctx, gate, string(action), text); err != nil {
-			return nil, false, err
+		// M3 (T-30): ошибка применения НЕ валит резолв — гейт уже резолвнут
+		// CAS'ом, повторный финализ опасен дублями. Per-card изоляция в
+		// ApplyOperations делает частичный сбой безопасным: применившееся
+		// остаётся, битое — в событии журнала (видно в UI) + лог.
+		if err := u.lessonsFinalizer.FinalizeLessonGate(ctx, gate, string(action), text, sel); err != nil {
+			slog.ErrorContext(ctx, "lesson gate finalize failed",
+				slog.String("component", "service/runsapi"),
+				slog.String("gate_id", gateID),
+				slog.String("error", err.Error()))
+			u.appendFinalizeErrorEvent(ctx, gate, err)
 		}
 	} else if (action == GateActionAnswer || action == GateActionComment) &&
 		text != nil && *text != "" && gate.StageID != nil {
@@ -405,6 +424,12 @@ func (u *Service) ResolveGateAPI(ctx context.Context, gateID string, action Gate
 		if _, err := u.machine.ReenterStage(ctx, *gate.StageID, *text); err != nil {
 			return nil, false, err
 		}
+	}
+
+	// T-30: outcome-трекинг уроков — approve финального гейта (best-effort,
+	// резолв не отменяется при сбое хука).
+	if gate.Kind == dtorep.GateKindFinalReview && action == GateActionApprove && u.outcomeHook != nil {
+		u.outcomeHook(ctx, gate.RunID)
 	}
 
 	gate, err = u.gates.GetGateByID(ctx, gateID)
@@ -503,6 +528,32 @@ func (u *Service) CreateNote(ctx context.Context, runID, text, idempotencyKey st
 		}
 	}
 	return nil, fmt.Errorf("note %d: %w", noteID, cstmerrors.ErrNotFound)
+}
+
+// appendFinalizeErrorEvent — событие о сбое применения уроков (M3, T-30):
+// гейт резолвнут, но часть операций не применилась — факт в журнале рана.
+// Best-effort: ошибка записи события только логируется вызывающим.
+func (u *Service) appendFinalizeErrorEvent(ctx context.Context, gate *dtorep.Gate, finalizeErr error) {
+	payload, err := json.Marshal(map[string]any{
+		"gate_id": gate.ID,
+		"action":  gate.State,
+		"error":   finalizeErr.Error(),
+	})
+	if err != nil {
+		return
+	}
+	if err := u.txm.WithTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		return u.appender.Append(ctx, tx, dtorep.Event{
+			RunID:       gate.RunID,
+			StageID:     gate.StageID,
+			Kind:        "lessons.finalize_error",
+			PayloadJSON: string(payload),
+		})
+	}); err != nil {
+		slog.ErrorContext(ctx, "failed to append finalize error event",
+			slog.String("component", "service/runsapi"),
+			slog.String("error", err.Error()))
+	}
 }
 
 var slugNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)

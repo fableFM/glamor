@@ -50,6 +50,20 @@ type Machine struct {
 	projects  projectsrep.RepositoryWithTX
 	notes     notesrep.RepositoryWithTX
 	appender  EventAppender
+	augmenter SpecAugmenter
+}
+
+// SpecAugmenter — детерминированная догрузка спеки при каждом чтении
+// (T-30: встроенный distill-этап по гарантии lessons:on, если в spec_json
+// distill удалён). Подставляемые этапы помечаются origin=builtin и НЕ
+// сохраняются в spec_json (версии неизменяемы, T-21). Реализация —
+// internal/service/pipeline (владеет embedded-промптом distill);
+// подключается из main. nil — спека читается как есть.
+type SpecAugmenter func(Spec) Spec
+
+// SetSpecAugmenter подключает аугментер спеки (ручной DI из main, D-80).
+func (m *Machine) SetSpecAugmenter(a SpecAugmenter) {
+	m.augmenter = a
 }
 
 // NewMachine собирает стейт-машину из готовых зависимостей (ручной DI в
@@ -754,6 +768,7 @@ func (m *Machine) stageHarness(ctx context.Context, runID, stageKey string) (str
 	if err != nil {
 		return "", err
 	}
+	spec = m.augment(spec)
 	for _, st := range spec.Stages {
 		if st.Key == stageKey {
 			return st.Harness, nil
@@ -860,4 +875,31 @@ func (m *Machine) LatestStage(ctx context.Context, runID, stageKey string) (*dto
 		return nil, err
 	}
 	return stage, nil
+}
+
+// SpecFor — эффективная спека пайплайна рана: spec_json + аугментер
+// (встроенный distill, T-30). Единая точка чтения спеки: и NextAction,
+// и supervisor видят один и тот же план.
+func (m *Machine) SpecFor(ctx context.Context, runID string) (Spec, error) {
+	run, err := m.runs.GetRunByID(ctx, runID)
+	if err != nil {
+		return Spec{}, err
+	}
+	pipeline, err := m.pipelines.GetPipelineByID(ctx, run.PipelineVersionID)
+	if err != nil {
+		return Spec{}, err
+	}
+	spec, err := ParseSpec(pipeline.SpecJSON)
+	if err != nil {
+		return Spec{}, err
+	}
+	return m.augment(spec), nil
+}
+
+// augment применяет аугментер (nil — спека как есть).
+func (m *Machine) augment(spec Spec) Spec {
+	if m.augmenter == nil {
+		return spec
+	}
+	return m.augmenter(spec)
 }

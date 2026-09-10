@@ -165,7 +165,7 @@ func (f *loopFixture) resolveOpenGate(t *testing.T, kind dtorep.GateKind, action
 		if err != nil || len(gates) != 1 || gates[0].Kind != kind {
 			return false
 		}
-		_, _, err = f.runsSvc.ResolveGateAPI(ctx, gates[0].ID, action, nil)
+		_, _, err = f.runsSvc.ResolveGateAPI(ctx, gates[0].ID, action, nil, nil)
 		return err == nil
 	}, 15*time.Second, 100*time.Millisecond, "gate %s must open and resolve", kind)
 }
@@ -246,7 +246,7 @@ func TestPipelineLoopEscalation(t *testing.T) {
 
 	// ответ пользователя → ре-вход fixer (диалоговый контур T-11)
 	answer := "просто напиши файл и заканчивай"
-	_, _, err = f.runsSvc.ResolveGateAPI(ctx, gates[0].ID, usecase.GateActionAnswer, &answer)
+	_, _, err = f.runsSvc.ResolveGateAPI(ctx, gates[0].ID, usecase.GateActionAnswer, &answer, nil)
 	require.NoError(t, err)
 
 	fixer, err := f.stages.GetLatestStage(ctx, f.runID, "fixer")

@@ -68,8 +68,12 @@ type LaunchContext struct {
 	// MaxIterations — лимит fix-петли из спеки ({{max_iterations}}, T-17).
 	MaxIterations int64
 	// LessonSignals — сигналы для distill-этапа (T-29): ответы на гейтах,
-	// queue notes, комментарии ({{gate_answers}}).
+	// queue notes, комментарии ({{gate_answers}} — fallback-плейсхолдер
+	// для пользовательских пайплайнов; основной вход distill — трейс).
 	LessonSignals string
+	// BehaviorTrace — трейс поведения рана для distill-этапа (T-30):
+	// заполняется supervisor'ом перед distill ({{behavior_trace}}).
+	BehaviorTrace string
 }
 
 // PromptBuilder собирает промпт этапа (полные промпты дефолтного пайплайна —
@@ -107,16 +111,21 @@ type Supervisor struct {
 	artifacts artifactsrep.RepositoryWithTX
 	gates     gatesrep.RepositoryWithTX
 
+	lessonsHooks LessonsHooks // контур уроков (T-30); nil — только трейс/distill
+
+	startedAt time.Time // подъём демона: отсечка истории терминального distill (T-30)
+
 	sem chan struct{} // пул процессов (D-33)
 
-	mu          sync.Mutex
-	procs       map[int64]*stageProc // stageID → живой процесс
-	resumeAfter map[int64]time.Time  // interrupted stageID → когда резюмить (backoff)
-	queued      map[int64]bool       // stage pending, ждёт семафор (событие stage.queued отправлено)
-	draining    bool                 // graceful shutdown (T-12): новые этапы не стартуем
-	completions chan stageResult     // завершившиеся процессы → классификация
-	stopCh      chan struct{}
-	wg          sync.WaitGroup
+	mu                     sync.Mutex
+	procs                  map[int64]*stageProc // stageID → живой процесс
+	resumeAfter            map[int64]time.Time  // interrupted stageID → когда резюмить (backoff)
+	queued                 map[int64]bool       // stage pending, ждёт семафор (событие stage.queued отправлено)
+	terminalDistillHandled map[string]bool      // runID → терминальный distill уже запущен/не нужен (T-30)
+	draining               bool                 // graceful shutdown (T-12): новые этапы не стартуем
+	completions            chan stageResult     // завершившиеся процессы → классификация
+	stopCh                 chan struct{}
+	wg                     sync.WaitGroup
 }
 
 func New(machine *runsmachine.Machine, registry *harness.Registry, journal *events.Journal,
@@ -133,24 +142,26 @@ func New(machine *runsmachine.Machine, registry *harness.Registry, journal *even
 		cfg.MaxParallel = 1
 	}
 	return &Supervisor{
-		machine:     machine,
-		registry:    registry,
-		journal:     journal,
-		cfg:         cfg,
-		prompt:      prompt,
-		runs:        runs,
-		stages:      stages,
-		projects:    projects,
-		pipelines:   pipelines,
-		notes:       notes,
-		artifacts:   artifacts,
-		gates:       gates,
-		sem:         make(chan struct{}, cfg.MaxParallel),
-		procs:       map[int64]*stageProc{},
-		resumeAfter: map[int64]time.Time{},
-		queued:      map[int64]bool{},
-		completions: make(chan stageResult, 64),
-		stopCh:      make(chan struct{}),
+		machine:                machine,
+		registry:               registry,
+		journal:                journal,
+		cfg:                    cfg,
+		prompt:                 prompt,
+		runs:                   runs,
+		stages:                 stages,
+		projects:               projects,
+		pipelines:              pipelines,
+		notes:                  notes,
+		artifacts:              artifacts,
+		gates:                  gates,
+		sem:                    make(chan struct{}, cfg.MaxParallel),
+		procs:                  map[int64]*stageProc{},
+		resumeAfter:            map[int64]time.Time{},
+		queued:                 map[int64]bool{},
+		terminalDistillHandled: map[string]bool{},
+		startedAt:              time.Now(),
+		completions:            make(chan stageResult, 64),
+		stopCh:                 make(chan struct{}),
 	}
 }
 
@@ -244,6 +255,10 @@ func (s *Supervisor) tick(ctx context.Context) error {
 	if s.isDraining() {
 		return nil
 	}
+	// 4.5 терминальный distill (T-30): failed-раны проходят distill out-of-band
+	if err := s.processTerminalDistills(ctx); err != nil {
+		logError(ctx, "terminal distill processing failed", err)
+	}
 	return s.processActiveRuns(ctx)
 }
 
@@ -281,18 +296,24 @@ func (s *Supervisor) processRun(ctx context.Context, run *dtorep.Run) error {
 		return nil
 
 	case runsmachine.ActionStartRun:
+		project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
+		if err != nil {
+			return err
+		}
 		if s.postRun != nil {
-			project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
-			if err != nil {
-				return err
-			}
 			if err := s.postRun(ctx, run, project.Path); err != nil {
 				return fmt.Errorf("post-run hook: %w", err)
 			}
 		}
+		// T-30: версионная деградация vendor-уроков при старте рана
+		s.checkVendorVersions(ctx, run, project.Path)
 		return s.machine.TransitionRun(ctx, run.ID, dtorep.RunStateRunning)
 
 	case runsmachine.ActionStartStage:
+		// мастер-выключатель lessons:off (T-30): distill пропускается
+		if s.skipDistillIfDisabled(ctx, run, action.StageKey) {
+			return nil
+		}
 		stage := action.Stage
 		if stage == nil {
 			stage, err = s.machine.StartStage(ctx, run.ID, action.StageKey, action.Harness)

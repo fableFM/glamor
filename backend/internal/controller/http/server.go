@@ -25,7 +25,7 @@ type Machine interface {
 	ResumeRun(ctx context.Context, runID string) (*dtorep.Run, error)
 	CreateNote(ctx context.Context, runID, text, idempotencyKey string) (*dtorep.Note, error)
 	InterruptStageSteer(ctx context.Context, stageID int64, message string) (*dtorep.Stage, error)
-	ResolveGateAPI(ctx context.Context, gateID string, action runsapi.GateAction, text *string) (gate *dtorep.Gate, alreadyResolved bool, err error)
+	ResolveGateAPI(ctx context.Context, gateID string, action runsapi.GateAction, text *string, sel *dtorep.LessonOpSelection) (gate *dtorep.Gate, alreadyResolved bool, err error)
 }
 
 // TelegramPairer — завершение привязки TG-чата по коду /start (T-19).

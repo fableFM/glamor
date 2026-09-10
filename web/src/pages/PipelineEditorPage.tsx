@@ -91,6 +91,20 @@ function LoopPanel({
         />
         финальный гейт (final_review) в конце пайплайна
       </label>
+      {/* гарантия формирования уроков (T-30, D-81): настройка spec, а не нода графа;
+          при включении ядро гарантирует distill-этап, даже если его удалили из пайплайна */}
+      <label
+        className="flex items-center gap-2 pt-1 text-xs text-zinc-400"
+        title="при включении supervisor гарантирует distill-этап и гейт lesson_review; выключение — мастер-выключатель (distill пропускается, трейс не собирается)"
+      >
+        <input
+          type="checkbox"
+          checked={spec.lessons}
+          disabled={readOnly}
+          onChange={(e) => onChange({ ...spec, lessons: e.target.checked })}
+        />
+        формировать уроки (distill + гейт lesson_review)
+      </label>
 
       {/* параллельные группы (T-28): объявление + политика on_failure */}
       <div className="border-t border-zinc-800 pt-2">

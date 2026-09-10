@@ -16,6 +16,7 @@ import (
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
 	"github.com/fableFM/glamor/internal/harness"
+	runsmachine "github.com/fableFM/glamor/internal/service/runsmachine"
 )
 
 // stageResult — итог завершения процесса этапа (канал классификации).
@@ -103,6 +104,14 @@ func (s *Supervisor) spawnStage(ctx context.Context, run *dtorep.Run, stage *dto
 		prev, err := s.stages.GetStageByIteration(ctx, run.ID, stage.StageKey, stage.Iteration-1)
 		if err == nil && prev.SessionID != nil {
 			lc.PrevSessionID = *prev.SessionID
+		}
+	}
+
+	// T-30: вход distill-этапа — трейс поведения рана (чинит P0: LessonSignals
+	// нигде не заполнялся). Мастер-выключатель lessons:off — трейс не собираем.
+	if runsmachine.IsDistillStage(stageSpec) {
+		if spec, err := s.specFor(ctx, run.ID); err == nil && spec.LessonsOn() {
+			s.attachBehaviorTrace(ctx, run, stage, &lc)
 		}
 	}
 

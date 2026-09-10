@@ -24,7 +24,10 @@ import (
 func newService(t *testing.T) *lessons.Service {
 	t.Helper()
 	db := testdb.New(t)
-	return lessons.New(lessonsrep.NewRepository(db), vendorindex.NewRepository(db), t.TempDir())
+	// globalDir как в проде (~/.glamor/lessons): сегмент lessons/ в пути
+	// обязателен — FTS-ретрив фильтрует хиты по нему.
+	return lessons.New(lessonsrep.NewRepository(db), vendorindex.NewRepository(db),
+		filepath.Join(t.TempDir(), "lessons"))
 }
 
 const sampleCards = `
@@ -66,8 +69,10 @@ func TestLessonInjectionIntoPrompt(t *testing.T) {
 	projectPath := t.TempDir()
 
 	cards := lessons.ParseCards(sampleCards)
-	lesson, err := svc.SaveCard(ctx, cards[0], "project", nil, projectPath,
-		nil, "coder", lessons.StatusConfirmed, "")
+	lesson, err := svc.SaveCard(ctx, lessons.SaveCardParams{
+		Card: cards[0], Scope: "project", ProjectPath: projectPath,
+		StageKey: "coder", Status: lessons.StatusConfirmed, Source: lessons.SourceUser,
+	})
 	require.NoError(t, err)
 
 	// файл на месте
@@ -102,13 +107,17 @@ func TestRejectedDedup(t *testing.T) {
 	svc := newService(t)
 
 	cards := lessons.ParseCards(sampleCards)
-	_, err := svc.SaveCard(ctx, cards[0], "project", nil, t.TempDir(),
-		nil, "coder", lessons.StatusRejected, "")
+	_, err := svc.SaveCard(ctx, lessons.SaveCardParams{
+		Card: cards[0], Scope: "project", ProjectPath: t.TempDir(),
+		StageKey: "coder", Status: lessons.StatusRejected, Source: lessons.SourceAuto,
+	})
 	require.NoError(t, err)
 
 	// повторное сохранение с тем же title → dedup-ошибка
-	_, err = svc.SaveCard(ctx, cards[0], "project", nil, t.TempDir(),
-		nil, "coder", lessons.StatusConfirmed, "")
+	_, err = svc.SaveCard(ctx, lessons.SaveCardParams{
+		Card: cards[0], Scope: "project", ProjectPath: t.TempDir(),
+		StageKey: "coder", Status: lessons.StatusConfirmed, Source: lessons.SourceAuto,
+	})
 	require.Error(t, err)
 	assert.True(t, lessons.IsDuplicate(err))
 
@@ -140,7 +149,7 @@ func TestFinalizeLessonGate(t *testing.T) {
 		ContextJSON: `{"lessons_path":"` + lessonsPath + `","stage_key":"distill"}`,
 	}
 
-	require.NoError(t, finalizer.FinalizeLessonGate(ctx, gate, "approve", nil))
+	require.NoError(t, finalizer.FinalizeLessonGate(ctx, gate, "approve", nil, nil))
 
 	list, err := svc.List(ctx, lessons.StatusConfirmed, "project", nil)
 	require.NoError(t, err)
@@ -155,9 +164,9 @@ func TestFinalizeLessonGate(t *testing.T) {
 		RunID: runID, Kind: dtorep.GateKindLessonReview,
 		ContextJSON: gate.ContextJSON,
 	}
-	require.NoError(t, finalizer.FinalizeLessonGate(ctx, gate2, "reject", nil))
+	require.NoError(t, finalizer.FinalizeLessonGate(ctx, gate2, "reject", nil, nil))
 	// повторный approve того же контента → dedup (ничего не сохраняется, без ошибки)
-	require.NoError(t, finalizer.FinalizeLessonGate(ctx, gate, "approve", nil))
+	require.NoError(t, finalizer.FinalizeLessonGate(ctx, gate, "approve", nil, nil))
 	listAll, err := svc.List(ctx, "", "", nil)
 	require.NoError(t, err)
 	var confirmed int

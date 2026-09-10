@@ -2,6 +2,24 @@
 @import 'streamdown/styles.css';
 
 /*
+  Departure Mono (OFL, https://departuremono.com) — основной шрифт всего
+  фронта. Переопределяем оба семейства Tailwind, чтобы font-sans и
+  font-mono вели на него.
+*/
+@font-face {
+  font-family: 'Departure Mono';
+  src: url('./assets/fonts/DepartureMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: 'Departure Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: 'Departure Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/*
   Тёмная тема по умолчанию (T-13). Светлая — позже, поэтому пока
   просто фиксируем тёмную палитру на уровне body.
 */
@@ -19,11 +37,7 @@ body {
   margin: 0;
   background-color: var(--color-zinc-950);
   color: var(--color-zinc-300);
-  font-family:
-    system-ui,
-    'Segoe UI',
-    Roboto,
-    sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -61,7 +75,7 @@ body {
   background: var(--color-zinc-800);
   padding: 0.1em 0.35em;
   font-size: 0.85em;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 .markdown-body pre {
   margin: 0.6em 0;

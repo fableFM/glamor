@@ -47,7 +47,7 @@ func TestQuestionAnswerFlow(t *testing.T) {
 
 	// ответ → ре-вход этапа с ответом (D-20)
 	answer := "используй sqlite"
-	_, already, err := f.runsSvc.ResolveGateAPI(ctx, questionGate.ID, runsapi.GateActionAnswer, &answer)
+	_, already, err := f.runsSvc.ResolveGateAPI(ctx, questionGate.ID, runsapi.GateActionAnswer, &answer, nil)
 	require.NoError(t, err)
 	assert.False(t, already)
 
@@ -73,7 +73,7 @@ func TestQuestionAnswerFlow(t *testing.T) {
 	}, 10*time.Second, 50*time.Millisecond, "plan_approval gate must open")
 
 	// approve → ран двигается к succeeded
-	_, _, err = f.runsSvc.ResolveGateAPI(ctx, approvalGate.ID, runsapi.GateActionApprove, nil)
+	_, _, err = f.runsSvc.ResolveGateAPI(ctx, approvalGate.ID, runsapi.GateActionApprove, nil, nil)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {

@@ -502,8 +502,25 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Список уроков (D-52, T-29) */
+        /** Список уроков (D-52, T-29; фильтры kind/attention — T-30) */
         get: operations["listLessons"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lessons/consolidation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Кандидаты на консолидацию уроков (T-30; ручной prune, без авто-консолидации) */
+        get: operations["lessonConsolidationCandidates"];
         put?: never;
         post?: never;
         delete?: never;
@@ -794,21 +811,56 @@ export interface components {
             /** @enum {string} */
             scope: "global" | "project";
             /** @enum {string} */
-            status: "proposed" | "confirmed" | "rejected" | "superseded";
+            status: "proposed" | "confirmed" | "rejected" | "superseded" | "outdated";
+            /**
+             * @description вид урока (T-30); vendor — знание о версии вендора
+             * @enum {string}
+             */
+            kind?: "behavior" | "vendor";
             /** Format: int64 */
             project_id?: number | null;
             path: string;
             run_id?: string | null;
             stage_key?: string;
+            vendor?: string | null;
+            vendor_version?: string | null;
+            /** @description область vendor-урока (миграции / API X / ...) */
+            area?: string | null;
+            /**
+             * Format: double
+             * @description важность (детерминированная производная счётчиков, T-30)
+             */
+            importance?: number;
             /** Format: int64 */
             applied_count?: number;
+            /**
+             * Format: int64
+             * @description успешные исходы ранов с инъекцией (T-30)
+             */
+            applied_success_count?: number;
             /** Format: int64 */
             relapse_count?: number;
+            /** @description id урока-замены (supersede-цепочка, T-30) */
+            superseded_by?: string | null;
+            /** @description id связанных уроков (A-MEM related, T-30) */
+            related?: string[];
             /** Format: date-time */
             created_at: string;
         };
         LessonDetail: components["schemas"]["Lesson"] & {
             content: string;
+        };
+        LessonDuplicatePair: {
+            lesson: components["schemas"]["Lesson"];
+            similar_to: components["schemas"]["Lesson"];
+            /** @description shared_trigger:<триггер> | similar_title */
+            reason: string;
+        };
+        LessonConsolidation: {
+            duplicates: components["schemas"]["LessonDuplicatePair"][];
+            stale_superseded: components["schemas"]["Lesson"][];
+            /** @description relapse_count >= applied_success_count (урок не работает) */
+            unhealthy: components["schemas"]["Lesson"][];
         };
         MemoryFileEntry: {
             path: string;
@@ -968,6 +1020,17 @@ export interface components {
             /** @enum {string} */
             action: "approve" | "reject" | "answer" | "comment";
             text?: string;
+            /**
+             * @description Per-card резолв гейта lesson_review (T-30): индексы операций
+             *     lessons.md в порядке разбора (0-based). Поле отсутствует —
+             *     «всё или ничего» (все операции принимаются/отклоняются по action).
+             */
+            lesson_ops?: {
+                /** @description принятые операции → применяются (confirmed) */
+                accept?: number[];
+                /** @description отклонённые NEW-карточки → rejected (dedup); дельты пропускаются */
+                reject?: number[];
+            };
         };
         ResolveGateResponse: {
             gate: components["schemas"]["Gate"];
@@ -1994,8 +2057,15 @@ export interface operations {
     listLessons: {
         parameters: {
             query?: {
-                status?: "proposed" | "confirmed" | "rejected" | "superseded";
+                status?: "proposed" | "confirmed" | "rejected" | "superseded" | "outdated";
                 scope?: "global" | "project";
+                kind?: "behavior" | "vendor";
+                /**
+                 * @description «Требуют внимания» (T-30): outdated (версия вендора разошлась
+                 *     с lockfile) или relapse_count >= applied_success_count
+                 *     (урок инжектят, а область ломается снова).
+                 */
+                attention?: boolean;
                 project_id?: number;
             };
             header?: never;
@@ -2011,6 +2081,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Lesson"][];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    lessonConsolidationCandidates: {
+        parameters: {
+            query?: {
+                /** @description superseded старше N дней — кандидаты на prune */
+                superseded_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description кандидаты (дубли, протухшие superseded, нездоровые) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LessonConsolidation"];
                 };
             };
             default: components["responses"]["Error"];

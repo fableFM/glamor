@@ -125,6 +125,7 @@ func DefaultSpec(ov Overrides) (string, error) {
 		},
 		"loop":       map[string]any{"from": "reviewer", "to": "fixer", "max_iters": 4},
 		"final_gate": "final_review",
+		"lessons":    "on", // гарантия формирования уроков (T-30, D-81)
 	}
 
 	data, err := json.Marshal(spec)
@@ -288,6 +289,48 @@ func (s *Service) ExportYAML(ctx context.Context, versionID int64) (string, erro
 		return "", fmt.Errorf("failed to load pipeline version: %w", err)
 	}
 	return specJSONToYAML(p.Name, p.Version, p.ParentVersionID, p.SpecJSON)
+}
+
+// BuiltinDistillAugmenter — SpecAugmenter для стейт-машины (T-30):
+// гарантия «хотя бы один distill в плане» при lessons:on. Если в спеке нет
+// distill-этапа (признак — gate_after=lesson_review), детерминированно
+// дописывает встроенный (embedded prompts/distill.md, артефакт lessons.md,
+// gate_after lesson_review, origin=builtin) в конец цепочки — перед
+// финальным гейтом. Пользовательский distill-этап уважается как есть.
+// lessons:off — спека возвращается без изменений (мастер-выключатель
+// реализует supervisor: distill-этапы пропускаются).
+func BuiltinDistillAugmenter(t Triplets) runsmachine.SpecAugmenter {
+	return func(spec runsmachine.Spec) runsmachine.Spec {
+		if !spec.LessonsOn() || spec.DistillStageKey() != "" {
+			return spec
+		}
+		tpl, err := promptsFS.ReadFile(promptDistill)
+		if err != nil {
+			return spec // embedded-промпт недоступен — не ломаем ран
+		}
+
+		key := "distill"
+		used := map[string]bool{}
+		for _, st := range spec.Stages {
+			used[st.Key] = true
+		}
+		for i := 2; used[key]; i++ {
+			key = fmt.Sprintf("distill-%d", i)
+		}
+
+		spec.Stages = append(spec.Stages, runsmachine.StageSpec{
+			Key:            key,
+			Kind:           "llm-stage",
+			Harness:        t.Harness,
+			Model:          t.Model,
+			Effort:         t.Effort,
+			Artifact:       &runsmachine.ArtifactRef{Path: "{run_dir}/lessons.md", Required: true},
+			GateAfter:      "lesson_review",
+			PromptTemplate: string(tpl),
+			Origin:         "builtin",
+		})
+		return spec
+	}
 }
 
 // LoopConfig — конфигурация fix-петли из спеки (nil — петли нет).

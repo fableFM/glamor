@@ -54,6 +54,13 @@ type Config struct {
 		MaxAutoResumes  int64  `yaml:"max_auto_resumes" validate:"min=0"`
 		RunsDir         string `yaml:"runs_dir" validate:"required"`
 	} `yaml:"supervisor"`
+
+	// Lessons — контур уроков (T-30).
+	Lessons struct {
+		// TokenBudget — бюджет инъекции уроков в промпт (символов,
+		// ~4 символа/токен; дефолт 8000 = 2000 токенов). 0 → дефолт.
+		TokenBudget int `yaml:"token_budget" validate:"min=0"`
+	} `yaml:"lessons"`
 }
 
 // defaultConfig возвращает конфигурацию с дефолтами.
@@ -68,6 +75,7 @@ func defaultConfig() Config {
 	cfg.Supervisor.MaxParallel = 4
 	cfg.Supervisor.MaxAutoResumes = 3
 	cfg.Supervisor.RunsDir = filepath.Join(glamorHome(), "runs")
+	cfg.Lessons.TokenBudget = 2000 * 4 // ~2k токенов в символах (T-30)
 	return cfg
 }
 
@@ -132,6 +140,12 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GLAMOR_TELEGRAM_ENABLED"); v != "" {
 		cfg.Telegram.Enabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("GLAMOR_LESSON_TOKEN_BUDGET"); v != "" {
+		var budget int
+		if _, err := fmt.Sscanf(v, "%d", &budget); err == nil {
+			cfg.Lessons.TokenBudget = budget
+		}
 	}
 }
 

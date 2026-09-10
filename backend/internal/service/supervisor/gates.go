@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
+	"github.com/fableFM/glamor/internal/service/lessons"
 	runsmachine "github.com/fableFM/glamor/internal/service/runsmachine"
 )
 
@@ -48,17 +49,19 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 
 	// 2. gate_after из спеки (plan_approval/final_review/...)
 	if spec.GateAfter != "" {
-		// lesson_review (T-29): открываем только если distill оставил карточки
+		var lessonsPath string
+		// lesson_review (T-29): открываем только если distill оставил
+		// операции (m14: парсер, а не эвристика — LINK-only черновик тоже
+		// открывает гейт; NO_LESSONS/мусор — нет)
 		if spec.GateAfter == "lesson_review" && spec.Artifact != nil {
 			project, err := s.projects.GetProjectByID(ctx, run.ProjectID)
 			if err != nil {
 				return err
 			}
-			lessonsPath := joinPath(project.Path, expandPath(spec.Artifact.Path, run.ID, s.runDir(run.ID)))
+			lessonsPath = joinPath(project.Path, expandPath(spec.Artifact.Path, run.ID, s.runDir(run.ID)))
 			data, err := os.ReadFile(lessonsPath)
-			if err != nil || !strings.Contains(string(data), "title:") ||
-				strings.Contains(string(data), "NO_LESSONS") {
-				return nil // уроков нет — гейт не открываем
+			if err != nil || !lessonDraftHasOperations(string(data)) {
+				return nil // операций нет — гейт не открываем
 			}
 		}
 		contextJSON := marshalEventPayload(map[string]any{
@@ -66,11 +69,20 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 			"iteration": stage.Iteration,
 		})
 		if spec.Artifact != nil {
-			contextJSON = marshalEventPayload(map[string]any{
+			payload := map[string]any{
 				"stage_key":      stage.StageKey,
 				"iteration":      stage.Iteration,
 				"artifact_paths": []string{spec.Artifact.Path},
-			})
+			}
+			if lessonsPath != "" {
+				// абсолютный путь к черновику — резолв-эффекты гейта
+				// (LessonsFinalizer) читают карточки отсюда (T-29/T-30)
+				payload["lessons_path"] = lessonsPath
+			}
+			if spec.Origin != "" {
+				payload["origin"] = spec.Origin // builtin distill (T-30)
+			}
+			contextJSON = marshalEventPayload(payload)
 		}
 		question := gateQuestion(dtorep.GateKind(spec.GateAfter), stage.StageKey)
 		// саммари артефакта — прямо в текст гейта (plan_approval: начало
@@ -79,6 +91,15 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 			if excerpt := s.readArtifactExcerpt(ctx, run, spec.Artifact.Path); excerpt != "" {
 				question += "\n\n---\n" + excerpt
 			}
+		}
+
+		// терминальный distill (T-30): ран уже завершён (failed) — гейт
+		// открывается out-of-band, без перевода рана в waiting_gate
+		if run.State != dtorep.RunStateRunning && run.State != dtorep.RunStateWaitingGate {
+			if dtorep.GateKind(spec.GateAfter) == dtorep.GateKindLessonReview {
+				return s.openTerminalLessonGate(ctx, run, stage, question, contextJSON)
+			}
+			return nil
 		}
 
 		_, err := s.machine.OpenGate(ctx, runsmachine.OpenGateRequest{
@@ -92,6 +113,16 @@ func (s *Supervisor) handlePostStageGates(ctx context.Context, run *dtorep.Run, 
 	}
 
 	return nil
+}
+
+// lessonDraftHasOperations — есть ли в черновике lessons.md валидные
+// операции distill (m14, T-30): полный парсер вместо эвристики «title:» —
+// NO_LESSONS и мусор не открывают гейт, LINK-only черновик — открывает.
+func lessonDraftHasOperations(content string) bool {
+	if strings.Contains(content, "NO_LESSONS") {
+		return false
+	}
+	return len(lessons.ParseOperations(content)) > 0
 }
 
 // gateQuestion — текст гейта по виду (T-11 таблица).

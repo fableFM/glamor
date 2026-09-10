@@ -193,7 +193,26 @@ func run() error {
 	// T-29: причинно-следственная память (lessons)
 	lessonsSvc := lessons.New(lessonsrep.NewRepository(db), vendorIndex,
 		filepath.Join(home, "lessons"))
+	// T-30: бюджет инъекции уроков — из конфига демона
+	lessonsSvc.SetTokenBudget(cfg.Lessons.TokenBudget)
 	runsSvc.SetLessonsFinalizer(lessons.NewGateFinalizer(lessonsSvc, runsRepo, projectsRepo))
+	// T-30: outcome-трекинг — approve финального гейта → applied_success_count++
+	// по урокам, реально инжектированным в этот ран и НЕ получившим relapse
+	// (M4; best-effort).
+	runsSvc.SetOutcomeHook(func(ctx context.Context, runID string) {
+		injected, err := lessonsSvc.LoadSuccessfulInjections(ctx, filepath.Join(supCfg.RunsDir, runID))
+		if err != nil || len(injected) == 0 {
+			return
+		}
+		if err := lessonsSvc.OutcomeApprove(ctx, injected); err != nil {
+			slog.ErrorContext(ctx, "lessons outcome tracking failed",
+				slog.String("component", "main"), slog.String("error", err.Error()))
+		}
+	})
+
+	// T-30: гарантия distill — стейт-машина дочитывает встроенный
+	// distill-этап, если его удалили из спеки (lessons:on).
+	machine.SetSpecAugmenter(pipeline.BuiltinDistillAugmenter(pipeline.DefaultOverrides().Fixer))
 
 	// T-17: промпт-билдер дефолтного пайплайна + fix-петля
 	promptBuilder := pipeline.NewPromptBuilder(filepath.Join(home, "vendors"))
@@ -222,6 +241,9 @@ func run() error {
 	}
 	sup := supervisor.New(machine, registry, journal, supCfg, promptBuilder.Build,
 		runsRepo, stagesRepo, projectsRepo, pipelinesRepo, notesRepo, artifactsRepo, gatesRepo)
+	// T-30: контур уроков (версионная деградация vendor-уроков при старте,
+	// relapse-эвристика после reviewer)
+	sup.SetLessonsHooks(lessonsSvc)
 	// T-17 fix-петля + T-23 применение дельт памяти после успешного этапа
 	loopHook := pipeline.NewLoopHook(machine, supCfg.RunsDir)
 	sup.SetOnStageSucceeded(func(ctx context.Context, run *dtorep.Run, stage *dtorep.Stage, spec runsmachine.Spec) error {

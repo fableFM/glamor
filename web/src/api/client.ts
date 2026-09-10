@@ -417,6 +417,8 @@ export type SupervisorSettingsPut = components['schemas']['SupervisorSettingsPut
 export type FsBrowseResult = components['schemas']['FsBrowseResult']
 export type Lesson = components['schemas']['Lesson']
 export type LessonDetail = components['schemas']['LessonDetail']
+export type LessonDuplicatePair = components['schemas']['LessonDuplicatePair']
+export type LessonConsolidation = components['schemas']['LessonConsolidation']
 
 export function getSettings(): Promise<OkResponse<'getSettings'>> {
   return request<OkResponse<'getSettings'>>('/settings')
@@ -444,6 +446,13 @@ export function listLessons(filter: ListLessonsQuery = {}): Promise<OkResponse<'
 
 export function getLesson(id: string): Promise<OkResponse<'getLesson'>> {
   return request<OkResponse<'getLesson'>>(`/lessons/${id}`)
+}
+
+/** Кандидаты на консолидацию уроков (T-30): дубли, протухшие superseded, нездоровые. */
+export function lessonConsolidation(supersededDays?: number): Promise<OkResponse<'lessonConsolidationCandidates'>> {
+  return request<OkResponse<'lessonConsolidationCandidates'>>('/lessons/consolidation', {
+    query: { superseded_days: supersededDays },
+  })
 }
 
 type PatchLessonBody = NonNullable<

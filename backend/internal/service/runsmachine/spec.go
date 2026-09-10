@@ -23,6 +23,12 @@ type Spec struct {
 	// MemoryScope — политика записи vendor-памяти (T-23): "auto" (дефолт:
 	// локальная+глобальная) | "gate" (только локальная, промоушн кнопкой).
 	MemoryScope string `json:"memory_scope,omitempty"`
+	// Lessons — гарантия формирования уроков (T-30, D-81): "on" (дефолт:
+	// supervisor гарантирует distill-этап, встроенный при отсутствии в
+	// спеке, включая терминальные неуспешные исходы) | "off"
+	// (мастер-выключатель: distill пропускается, трейс не собирается).
+	// Пусто трактуется как "on" (обратная совместимость старых spec_json).
+	Lessons string `json:"lessons,omitempty"`
 	// ParallelGroups — fan-out ветки (T-28): группы этапов, выполняемых
 	// параллельно (только read_only этапы, ADR-003).
 	ParallelGroups []ParallelGroupSpec `json:"parallel_groups,omitempty"`
@@ -80,12 +86,41 @@ type StageSpec struct {
 	// ReadOnly — этап не пишет в чекаут (исследование/планирование);
 	// обязателен для параллельных этапов (ADR-003).
 	ReadOnly bool `json:"read_only,omitempty"`
+
+	// Origin — происхождение этапа (T-30): "" — из спеки пайплайна;
+	// "builtin" — детерминированно дописан ядром (встроенный distill по
+	// гарантии lessons:on). Поле синтетическое: встроенные этапы не
+	// сохраняются в spec_json, а подставляются при каждом чтении спеки.
+	Origin string `json:"origin,omitempty"`
 }
 
 // ArtifactRef — ссылка на обязательный артефакт этапа в спеке пайплайна.
 type ArtifactRef struct {
 	Path     string `json:"path"` // относительно чекаута проекта
 	Required bool   `json:"required"`
+}
+
+// LessonsOn — включена ли гарантия формирования уроков (T-30): пустое
+// значение = "on" (обратная совместимость спек, записанных до T-30).
+func (s Spec) LessonsOn() bool {
+	return s.Lessons != "off"
+}
+
+// IsDistillStage — признак distill-этапа (T-30): этап, за которым открывается
+// гейт lesson_review. Именно по этому признаку supervisor собирает трейс
+// поведения и применяет мастер-выключатель lessons:off.
+func IsDistillStage(st StageSpec) bool {
+	return st.GateAfter == "lesson_review"
+}
+
+// DistillStageKey — ключ первого distill-этапа спеки ("" — distill отсутствует).
+func (s Spec) DistillStageKey() string {
+	for _, st := range s.Stages {
+		if IsDistillStage(st) {
+			return st.Key
+		}
+	}
+	return ""
 }
 
 // ParseSpec разбирает spec_json версии пайплайна.

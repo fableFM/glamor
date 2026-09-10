@@ -334,6 +334,7 @@ export function StagePanel({
           <GateView
             key={openGate.id}
             gate={openGate}
+            artifacts={artifacts}
             onResolved={() => onGateViewChange(false)}
             onClose={() => onGateViewChange(false)}
           />

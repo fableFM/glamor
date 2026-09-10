@@ -33,6 +33,13 @@ func ValidateSpec(specJSON string) error {
 		return fmt.Errorf("%w: unknown review_policy %q (want blocking|major|all)", errValidation, spec.ReviewPolicy)
 	}
 
+	// lessons — гарантия формирования уроков (T-30): on|off (пусто = on)
+	switch spec.Lessons {
+	case "", "on", "off":
+	default:
+		return fmt.Errorf("%w: unknown lessons %q (want on|off)", errValidation, spec.Lessons)
+	}
+
 	// loop-ребро ссылается на существующие этапы
 	if spec.Loop != nil {
 		if !keys[spec.Loop.From] {
@@ -128,6 +135,7 @@ var knownPlaceholders = map[string]bool{
 	"depth": true, "depth_instructions": true, "queue_notes": true,
 	"vendor_memory_paths": true, "vendor_memory": true, "verdict": true, "iteration": true,
 	"lessons": true, "gate_answers": true, "rejected_lessons": true,
+	"behavior_trace": true, "existing_lessons": true, "vendor_lessons": true,
 	"max_iterations": true,
 }
 

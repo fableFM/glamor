@@ -219,7 +219,7 @@ func (a *Adapter) handleReply(ctx context.Context, msg *Message, updateID int64)
 // в ядре идентичны (answered + диалоговый ре-вход этапа, D-20/22), поэтому
 // всегда GateActionAnswer.
 func (a *Adapter) resolveGateByReply(ctx context.Context, msg *Message, gateID string) {
-	_, already, err := a.runsSvc.ResolveGateAPI(ctx, gateID, runsapi.GateActionAnswer, &msg.Text)
+	_, already, err := a.runsSvc.ResolveGateAPI(ctx, gateID, runsapi.GateActionAnswer, &msg.Text, nil)
 	switch {
 	case err == nil && already:
 		a.reply(ctx, msg.Chat.ID, msg.MessageID, "Гейт уже резолвнут.")
@@ -267,7 +267,7 @@ func (a *Adapter) handleCallback(ctx context.Context, cq *CallbackQuery) {
 		return
 	}
 
-	_, already, err := a.runsSvc.ResolveGateAPI(ctx, gateID, action, nil)
+	_, already, err := a.runsSvc.ResolveGateAPI(ctx, gateID, action, nil, nil)
 	switch {
 	case err == nil && already:
 		a.answerCallback(ctx, cq.ID, "Гейт уже резолвнут.")

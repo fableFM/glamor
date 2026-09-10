@@ -166,6 +166,8 @@ func (s *Supervisor) classify(ctx context.Context, result stageResult) error {
 			}
 			// регистрация артефакта этапа (D-13, виден в UI)
 			s.registerStageArtifact(ctx, run, stage)
+			// T-30: архив verdict-<iter>.json (полная fix-петля в трейсе)
+			s.archiveVerdictSnapshot(ctx, run, stage)
 			// диалоговый протокол (D-20/21): артефакт-гейты до продвижения
 			if err := s.handlePostStageGates(ctx, run, stage); err != nil {
 				return err
@@ -175,8 +177,12 @@ func (s *Supervisor) classify(ctx context.Context, result stageResult) error {
 				if err != nil {
 					return err
 				}
-				return s.onSuccess(ctx, run, stage, spec)
+				if err := s.onSuccess(ctx, run, stage, spec); err != nil {
+					return err
+				}
 			}
+			// T-30: relapse-эвристика по инжектированным в ран урокам
+			s.runRelapseCheck(ctx, run, stage)
 			return nil
 		}
 		errMsg := "stage finished with exit 0 but required artifact is missing"
@@ -330,21 +336,10 @@ func (s *Supervisor) runDir(runID string) string {
 	return joinPath(s.GetConfig().RunsDir, runID)
 }
 
-// specFor — спека пайплайна рана.
+// specFor — эффективная спека пайплайна рана (через машину: spec_json +
+// аугментер — встроенный distill по гарантии lessons:on, T-30).
 func (s *Supervisor) specFor(ctx context.Context, runID string) (runsmachine.Spec, error) {
-	run, err := s.runs.GetRunByID(ctx, runID)
-	if err != nil {
-		return runsmachine.Spec{}, err
-	}
-	pipeline, err := s.pipelines.GetPipelineByID(ctx, run.PipelineVersionID)
-	if err != nil {
-		return runsmachine.Spec{}, err
-	}
-	spec, err := runsmachine.ParseSpec(pipeline.SpecJSON)
-	if err != nil {
-		return runsmachine.Spec{}, err
-	}
-	return spec, nil
+	return s.machine.SpecFor(ctx, runID)
 }
 
 // stageSpecFor — спека этапа из пайплайна рана (модель/effort/артефакт).

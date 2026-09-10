@@ -190,6 +190,14 @@ type Gate struct {
 	ResolvedAt     *time.Time
 }
 
+// LessonOpSelection — per-card резолв гейта lesson_review (T-30): индексы
+// операций lessons.md в порядке lessons.ParseOperations (0-based).
+// nil у вызывающего = «всё или ничего» (поведение T-29).
+type LessonOpSelection struct {
+	Accept []int // принятые операции → применяются (confirmed)
+	Reject []int // отклонённые: NEW сохраняются rejected (dedup), дельты пропускаются
+}
+
 type CreateGateRequest struct {
 	ID             string
 	RunID          string
@@ -291,14 +299,27 @@ type Lesson struct {
 	ID           string
 	Title        string
 	Scope        string // global | project
-	Status       string // proposed | confirmed | rejected | superseded
+	Status       string // proposed | confirmed | rejected | superseded | outdated
+	Kind         string // behavior | vendor (T-30)
 	ProjectID    *int64
 	Path         string
 	TriggersJSON string
 	RunID        *string
 	StageKey     string
-	AppliedCount int64
-	RelapseCount int64
-	CreatedAt    time.Time
-	UpdatedAt    *time.Time
+	// Vendor/VendorVersion/Area — только kind=vendor (T-30): знание о
+	// поведении конкретной версии вендора в конкретной области.
+	Vendor        *string
+	VendorVersion *string
+	Area          *string
+	// Importance — детерминированная производная (источник + счётчики),
+	// пересчитывается при изменении applied_success_count/relapse_count.
+	Importance          float64
+	AppliedCount        int64 // инъекции в промпты
+	AppliedSuccessCount int64 // успешные исходы ранов с инъекцией (T-30)
+	RelapseCount        int64
+	LastAppliedAt       *time.Time
+	SupersededBy        *string // id урока-замены (supersede-цепочка, T-30)
+	RelatedJSON         string  // JSON-массив id связанных уроков (T-30)
+	CreatedAt           time.Time
+	UpdatedAt           *time.Time
 }

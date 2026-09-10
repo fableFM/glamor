@@ -1,6 +1,20 @@
-// Package lessons — причинно-следственная память (D-52, T-29): карточки
-// уроков «ситуация → симптом → причина → правило», distill-этап, гейт
-// «Сохранить урок?», инъекция в промпты с FTS и токен-бюджетом.
+// Package lessons — причинно-следственная память (D-52, T-29; эволюция —
+// T-30, D-81): карточки уроков «ситуация → симптом → причина → правило»,
+// distill-этап, гейт «Сохранить урок?», инъекция в промпты с FTS и
+// токен-бюджетом. Файлы пакета:
+//   - lessons.go — карточки, SaveCard, статусы/виды, дедуп;
+//   - trace.go — BehaviorTrace: детерминированный трейс поведения рана
+//     (verdict.json, логи этапов, fix-петля) → run_facts.json + текст для
+//     промпта distill;
+//   - operations.go — операции distill v2 (NEW/REFINE/SUPERSEDE/LINK/
+//     QUESTION) и их per-card применение;
+//   - scoring.go — ретрив v2: score = w_rel·fts + w_imp·importance +
+//     w_rec·recency (Generative Agents), RelevantLessons /
+//     RelevantVendorLessons возвращают текст + список инъекций;
+//   - vendor.go — vendor-уроки: парсинг, валидация точной версии,
+//     деградация outdated по go.mod;
+//   - quality.go — петля качества: RelapseCheck / OutcomeApprove;
+//   - finalize.go — резолв-эффекты гейта lesson_review.
 package lessons
 
 import (
@@ -19,27 +33,48 @@ import (
 	"github.com/fableFM/glamor/pkg/uuid"
 )
 
-// Статусы карточек (миграция 20260817140000).
+// Статусы карточек (миграция 20260817140000 + outdated из 20260819120000).
 const (
 	StatusProposed   = "proposed"
 	StatusConfirmed  = "confirmed"
 	StatusRejected   = "rejected"
 	StatusSuperseded = "superseded"
+	// StatusOutdated — vendor-урок, чья vendor_version разошлась с lockfile
+	// проекта (T-30): не удаляем, инжектим с префиксом-предупреждением.
+	StatusOutdated = "outdated"
 )
 
-// LessonTokenBudget — бюджет инъекции уроков в промпт (~символов).
+// Виды уроков (T-30): behavior — поведенческие (как в T-29), vendor —
+// знание о поведении конкретной версии вендора.
+const (
+	KindBehavior = "behavior"
+	KindVendor   = "vendor"
+)
+
+// LessonTokenBudget — дефолтный бюджет инъекции уроков в промпт
+// (~символов); переопределяется через SetTokenBudget (T-30: бюджет —
+// параметр Service, константа остаётся дефолтом).
 const LessonTokenBudget = 2000 * 4
 
 // Service — сценарии уроков. Файлы — источник содержимого, БД —
 // статусы/счётчики/индекс; FTS — через vendorindex (те же механики, T-23).
 type Service struct {
-	repo      lessonsrep.RepositoryWithTX
-	index     *vendorindex.Repository
-	globalDir string // ~/.glamor/lessons
+	repo        lessonsrep.RepositoryWithTX
+	index       *vendorindex.Repository
+	globalDir   string // ~/.glamor/lessons
+	tokenBudget int
 }
 
 func New(repo lessonsrep.RepositoryWithTX, index *vendorindex.Repository, globalDir string) *Service {
-	return &Service{repo: repo, index: index, globalDir: globalDir}
+	return &Service{repo: repo, index: index, globalDir: globalDir, tokenBudget: LessonTokenBudget}
+}
+
+// SetTokenBudget переопределяет бюджет инъекции (из конфига демона, T-30).
+// Неположительное значение игнорируется (остаётся дефолт).
+func (s *Service) SetTokenBudget(budget int) {
+	if budget > 0 {
+		s.tokenBudget = budget
+	}
 }
 
 // LessonsDir — каталог уроков: глобальный или проектный.
@@ -57,12 +92,19 @@ type Card struct {
 	Body     string
 }
 
-// ParseCards разбирает lessons.md на карточки: frontmatter между парой
-// "---" + тело до следующей карточки. Устойчив к мусору: невалидные
-// куски пропускаются (LLM-вывод не ломает ядро). Ручной разбор — RE2
-// не поддерживает lookahead.
-func ParseCards(content string) []Card {
-	var cards []Card
+// rawCard — сырая карточка: весь frontmatter как map + тело. Общий
+// сплиттер для ParseCards (T-29), ParseOperations и ParseVendorCards (T-30).
+type rawCard struct {
+	fm   map[string]string
+	body string
+}
+
+// splitCards разбирает markdown на карточки: frontmatter между парой "---"
+// + тело до следующей карточки. Устойчив к мусору: невалидные куски
+// пропускаются (LLM-вывод не ломает ядро). Ручной разбор — RE2 не
+// поддерживает lookahead.
+func splitCards(content string) []rawCard {
+	var cards []rawCard
 
 	const (
 		stOutside = iota
@@ -73,25 +115,15 @@ func ParseCards(content string) []Card {
 	var fm, body strings.Builder
 
 	finishCard := func() {
-		card := Card{Body: strings.TrimSpace(body.String())}
+		card := rawCard{fm: map[string]string{}, body: strings.TrimSpace(body.String())}
 		for _, line := range strings.Split(fm.String(), "\n") {
 			key, value, ok := strings.Cut(line, ":")
 			if !ok {
 				continue
 			}
-			switch strings.TrimSpace(key) {
-			case "title":
-				card.Title = strings.TrimSpace(value)
-			case "triggers":
-				value = strings.Trim(strings.TrimSpace(value), "[]")
-				for _, trg := range strings.Split(value, ",") {
-					if t := strings.TrimSpace(trg); t != "" {
-						card.Triggers = append(card.Triggers, t)
-					}
-				}
-			}
+			card.fm[strings.TrimSpace(key)] = strings.TrimSpace(value)
 		}
-		if card.Title != "" && card.Body != "" {
+		if len(card.fm) > 0 || card.body != "" {
 			cards = append(cards, card)
 		}
 		fm.Reset()
@@ -124,61 +156,145 @@ func ParseCards(content string) []Card {
 	return cards
 }
 
+// parseList — значение frontmatter вида "[a, b]" → срез строк.
+func parseList(value string) []string {
+	value = strings.Trim(strings.TrimSpace(value), "[]")
+	var out []string
+	for _, item := range strings.Split(value, ",") {
+		if t := strings.TrimSpace(item); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// ParseCards разбирает lessons.md на карточки уроков (поведение T-29:
+// валидная карточка = title + тело).
+func ParseCards(content string) []Card {
+	var cards []Card
+	for _, raw := range splitCards(content) {
+		card := Card{
+			Title:    raw.fm["title"],
+			Triggers: parseList(raw.fm["triggers"]),
+			Body:     raw.body,
+		}
+		if card.Title != "" && card.Body != "" {
+			cards = append(cards, card)
+		}
+	}
+	return cards
+}
+
+// Источники урока (T-30): влияют на начальную importance — сигнал от
+// пользователя (answer/comment на гейте) весомее автоматического вывода
+// distill из трейса рана.
+const (
+	SourceUser = "user"
+	SourceAuto = "auto"
+)
+
+// Начальная importance по источнику (T-30; дальше важность двигают
+// счётчики applied_success/relapse — см. scoring.go и repository).
+const (
+	ImportanceUser = 0.7 // урок из ответа/комментария пользователя
+	ImportanceAuto = 0.5 // урок, выведенный из трейса без участия пользователя
+)
+
+// importanceForSource — начальная важность по источнику карточки.
+func importanceForSource(source string) float64 {
+	if source == SourceUser {
+		return ImportanceUser
+	}
+	return ImportanceAuto
+}
+
+// SaveCardParams — параметры сохранения карточки (T-30: kind, vendor-поля,
+// источник для importance). Kind пустой → behavior.
+type SaveCardParams struct {
+	Card          Card
+	Scope         string // global | project
+	ProjectID     *int64
+	ProjectPath   string
+	RunID         *string
+	StageKey      string
+	Status        string
+	UserAnswer    string // ответ пользователя — дописывается в «Причину»
+	Kind          string // behavior | vendor
+	Vendor        string // только kind=vendor
+	VendorVersion string
+	Area          string // только kind=vendor
+	Source        string // SourceUser | SourceAuto → начальная importance
+}
+
 // SaveCard сохраняет карточку: файл + строка в БД (status) + FTS-индекс.
 // Дедуп: урок с таким же title и status=rejected уже есть → не сохраняем
 // (T-29: отклонённый урок не предлагается повторно в том же виде).
-func (s *Service) SaveCard(ctx context.Context, card Card, scope string, projectID *int64, projectPath string,
-	runID *string, stageKey, status, userAnswer string,
-) (*dtorep.Lesson, error) {
+// Vendor-карточки кладутся в подкаталог vendor/<name>/ (T-30).
+func (s *Service) SaveCard(ctx context.Context, p SaveCardParams) (*dtorep.Lesson, error) {
 	existing, err := s.repo.ListLessons(ctx, StatusRejected, "", nil)
 	if err != nil {
 		return nil, err
 	}
 	for _, l := range existing {
-		if l.Title == card.Title {
-			return nil, fmt.Errorf("lesson %q was rejected before — not saved: %w", card.Title, errDuplicate)
+		if l.Title == p.Card.Title {
+			return nil, fmt.Errorf("lesson %q was rejected before — not saved: %w", p.Card.Title, errDuplicate)
 		}
 	}
 
+	kind := p.Kind
+	if kind == "" {
+		kind = KindBehavior
+	}
 	id := "lesson-" + uuid.New()
-	dir := s.LessonsDir(scope, projectPath)
+	dir := s.LessonsDir(p.Scope, p.ProjectPath)
+	if kind == KindVendor && p.Vendor != "" {
+		dir = filepath.Join(dir, "vendor", sanitizePathPart(p.Vendor))
+	}
 	path := filepath.Join(dir, id+".md")
 
-	body := card.Body
-	if userAnswer != "" {
-		body += fmt.Sprintf("\n\n## Причина (ответ пользователя)\n%s\n", userAnswer)
+	body := p.Card.Body
+	if p.UserAnswer != "" {
+		body += fmt.Sprintf("\n\n## Причина (ответ пользователя)\n%s\n", p.UserAnswer)
 	}
 
 	var buf strings.Builder
-	fmt.Fprintf(&buf, "---\nid: %s\ntitle: %s\ntriggers: [%s]\nstatus: %s\ncreated: %s\n---\n\n%s\n",
-		id, card.Title, strings.Join(card.Triggers, ", "), status,
-		time.Now().UTC().Format("2006-01-02"), body)
+	fmt.Fprintf(&buf, "---\nid: %s\nkind: %s\ntitle: %s\ntriggers: [%s]\nstatus: %s\ncreated: %s\n",
+		id, kind, p.Card.Title, strings.Join(p.Card.Triggers, ", "), p.Status,
+		time.Now().UTC().Format("2006-01-02"))
+	if kind == KindVendor {
+		fmt.Fprintf(&buf, "vendor: %s\nvendor_version: %s\narea: %s\n",
+			p.Vendor, p.VendorVersion, p.Area)
+	}
+	fmt.Fprintf(&buf, "---\n\n%s\n", body)
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(buf.String()), 0o644); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := writeFileAtomic(path, []byte(buf.String())); err != nil {
 		return nil, err
 	}
 
 	triggersJSON := "[]"
-	if data, err := json.Marshal(card.Triggers); err == nil {
+	if data, err := json.Marshal(p.Card.Triggers); err == nil {
 		triggersJSON = string(data)
 	}
 	lesson := &dtorep.Lesson{
 		ID:           id,
-		Title:        card.Title,
-		Scope:        scope,
-		Status:       status,
-		ProjectID:    projectID,
+		Title:        p.Card.Title,
+		Scope:        p.Scope,
+		Status:       p.Status,
+		Kind:         kind,
+		ProjectID:    p.ProjectID,
 		Path:         path,
 		TriggersJSON: triggersJSON,
-		RunID:        runID,
-		StageKey:     stageKey,
+		RunID:        p.RunID,
+		StageKey:     p.StageKey,
+		Importance:   importanceForSource(p.Source),
+	}
+	if kind == KindVendor {
+		lesson.Vendor = strPtr(p.Vendor)
+		lesson.VendorVersion = strPtr(p.VendorVersion)
+		lesson.Area = strPtr(p.Area)
 	}
 	if err := s.repo.CreateLesson(ctx, lesson); err != nil {
 		return nil, err
@@ -191,54 +307,32 @@ func (s *Service) SaveCard(ctx context.Context, card Card, scope string, project
 	return lesson, nil
 }
 
-// RelevantLessons — confirmed-уроки для промпта (FTS по задаче,
-// токен-бюджет, applied_count++), T-29.
-func (s *Service) RelevantLessons(ctx context.Context, taskText string) (string, error) {
-	query := ftsQueryFromText(taskText)
-	if query == "" {
-		return "", nil
+// writeFileAtomic — tmp+rename (атомарная запись файла урока).
+func writeFileAtomic(path string, data []byte) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
 	}
-	hits, err := s.index.Search(ctx, query, 10)
-	if err != nil {
-		return "", err
-	}
-
-	var sb strings.Builder
-	for _, hit := range hits {
-		if !strings.Contains(hit.Path, string(filepath.Separator)+"lessons"+string(filepath.Separator)) {
-			continue // vendor-память инжектится своим плейсхолдером (T-23)
-		}
-		if sb.Len() > LessonTokenBudget {
-			break
-		}
-
-		// подтверждаем, что урок confirmed, и инкрементируем счётчик
-		lesson, err := s.findByPath(ctx, hit.Path)
-		if err != nil || lesson.Status != StatusConfirmed {
-			continue
-		}
-		data, err := os.ReadFile(hit.Path)
-		if err != nil {
-			continue
-		}
-		fmt.Fprintf(&sb, "### %s\n%s\n\n", lesson.Title, string(data))
-		_ = s.repo.IncrementApplied(ctx, lesson.ID)
-	}
-	return sb.String(), nil
+	return os.Rename(tmp, path)
 }
 
-// findByPath — урок по пути файла (для FTS-инъекции).
-func (s *Service) findByPath(ctx context.Context, path string) (*dtorep.Lesson, error) {
-	all, err := s.repo.ListLessons(ctx, "", "", nil)
-	if err != nil {
-		return nil, err
-	}
-	for i := range all {
-		if all[i].Path == path {
-			return &all[i], nil
+// sanitizePathPart — имя вендора → безопасный кусок пути каталога.
+func sanitizePathPart(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\':
+			return '_'
+		default:
+			return r
 		}
+	}, s)
+}
+
+func strPtr(s string) *string {
+	if s == "" {
+		return nil
 	}
-	return nil, fmt.Errorf("lesson at %s: not found", path)
+	return &s
 }
 
 // RejectedTitles — заголовки отклонённых уроков (dedup для distill, T-29).

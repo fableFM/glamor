@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/fableFM/glamor/internal/dto/dtorep"
+	"github.com/fableFM/glamor/internal/service/lessons"
 	"github.com/fableFM/glamor/internal/service/supervisor"
 )
 
@@ -19,9 +20,15 @@ type MemorySearcher interface {
 }
 
 // LessonsProvider — подтверждённые уроки для промпта (T-29; реализация —
-// internal/service/lessons).
+// internal/service/lessons). RelevantLessons возвращает текст секции и
+// список инжектированных уроков (T-30: для relapse/outcome трекинга).
 type LessonsProvider interface {
-	RelevantLessons(ctx context.Context, taskText string) (string, error)
+	RelevantLessons(ctx context.Context, taskText string) (string, []lessons.InjectedLesson, error)
+	// RelevantVendorLessons — секция «Уроки по вендорам» (T-30, planner).
+	RelevantVendorLessons(ctx context.Context, taskText string) (string, []lessons.InjectedLesson, error)
+	// ExistingLessonsSummary — id+title+триггеры confirmed-уроков для
+	// distill (T-30: дельта-операции REFINE/SUPERSEDE/LINK).
+	ExistingLessonsSummary(ctx context.Context) (string, error)
 	// RejectedTitles — заголовки отклонённых уроков (dedup для distill).
 	RejectedTitles(ctx context.Context) ([]string, error)
 }
@@ -102,6 +109,15 @@ func (b *PromptBuilder) resolve(ctx context.Context, name string, lc supervisor.
 		return b.vendorMemory(ctx, lc)
 	case name == "lessons":
 		return b.confirmedLessons(ctx, lc)
+	case name == "vendor_lessons":
+		return b.vendorLessons(ctx, lc)
+	case name == "behavior_trace":
+		if lc.BehaviorTrace == "" {
+			return "(трейс поведения не собран)", nil
+		}
+		return lc.BehaviorTrace, nil
+	case name == "existing_lessons":
+		return b.existingLessons(ctx)
 	case name == "gate_answers":
 		if lc.LessonSignals == "" {
 			return "(сигналов нет)", nil
@@ -188,16 +204,56 @@ func ftsQueryFromText(text string) string {
 	return strings.Join(terms, " OR ")
 }
 
-// confirmedLessons — подтверждённые уроки для промпта (T-29).
+// confirmedLessons — подтверждённые behavior-уроки для промпта (T-29/T-30:
+// скоринг-ретрив, инъекция и в planner, и в coder). Инъекции журналируются
+// в run_dir/injected-lessons.jsonl — петля качества (relapse/outcome)
+// трекает только реально инжектированные в ран уроки.
 func (b *PromptBuilder) confirmedLessons(ctx context.Context, lc supervisor.LaunchContext) (string, error) {
 	if b.lessons == nil {
 		return "(уроки не подключены)", nil
 	}
-	out, err := b.lessons.RelevantLessons(ctx, lc.Run.TaskText)
+	out, injected, err := b.lessons.RelevantLessons(ctx, lc.Run.TaskText)
 	if err != nil || out == "" {
 		return "(подтверждённых уроков нет)", nil
 	}
+	b.recordInjections(lc, injected)
 	return out, nil
+}
+
+// vendorLessons — секция «Уроки по вендорам» (T-30, planner): kind=vendor,
+// триггер — упоминание вендора в задаче; outdated инжектятся с префиксом-
+// предупреждением.
+func (b *PromptBuilder) vendorLessons(ctx context.Context, lc supervisor.LaunchContext) (string, error) {
+	if b.lessons == nil {
+		return "(уроки не подключены)", nil
+	}
+	out, injected, err := b.lessons.RelevantVendorLessons(ctx, lc.Run.TaskText)
+	if err != nil || out == "" {
+		return "(уроков по вендорам нет)", nil
+	}
+	b.recordInjections(lc, injected)
+	return out, nil
+}
+
+// recordInjections — журнал инъекций рана (best-effort: сбой записи не
+// должен ломать рендер промпта).
+func (b *PromptBuilder) recordInjections(lc supervisor.LaunchContext, injected []lessons.InjectedLesson) {
+	if lc.RunDir == "" {
+		return
+	}
+	_ = lessons.AppendInjectedRecords(lc.RunDir, lc.Stage.StageKey, injected)
+}
+
+// existingLessons — сводка confirmed-уроков для distill (T-30).
+func (b *PromptBuilder) existingLessons(ctx context.Context) (string, error) {
+	if b.lessons == nil {
+		return "(n/a)", nil
+	}
+	summary, err := b.lessons.ExistingLessonsSummary(ctx)
+	if err != nil || summary == "" {
+		return "(подтверждённых уроков нет)", nil
+	}
+	return summary, nil
 }
 
 // rejectedLessons — заголовки отклонённых уроков (dedup для distill, T-29).

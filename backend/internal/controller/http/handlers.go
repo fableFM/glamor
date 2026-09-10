@@ -271,8 +271,27 @@ func (h *handlers) InterruptStage(ctx context.Context, req genapi.InterruptStage
 // --- gates -------------------------------------------------------------------
 
 func (h *handlers) ResolveGate(ctx context.Context, req genapi.ResolveGateRequestObject) (genapi.ResolveGateResponseObject, error) {
+	// per-card резолв гейта lesson_review (T-30); nil — «всё или ничего»
+	var sel *dtorep.LessonOpSelection
+	if req.Body.LessonOps != nil {
+		// m6 (T-30): per-card выбор допустим только с approve — иначе
+		// reject с accept-списком молча подтвердил бы уроки
+		if req.Body.Action != genapi.Approve {
+			return genapi.ResolveGatedefaultJSONResponse{
+				Body:       genapi.Error{Code: "validation", Message: "lesson_ops допустимы только с action=approve"},
+				StatusCode: 400,
+			}, nil
+		}
+		sel = &dtorep.LessonOpSelection{}
+		if req.Body.LessonOps.Accept != nil {
+			sel.Accept = *req.Body.LessonOps.Accept
+		}
+		if req.Body.LessonOps.Reject != nil {
+			sel.Reject = *req.Body.LessonOps.Reject
+		}
+	}
 	gate, alreadyResolved, err := h.machine.ResolveGateAPI(ctx, req.Id,
-		runsapi.GateAction(req.Body.Action), req.Body.Text)
+		runsapi.GateAction(req.Body.Action), req.Body.Text, sel)
 	if err != nil {
 		e, status := errorToResponse(err)
 		return genapi.ResolveGatedefaultJSONResponse{Body: e, StatusCode: status}, nil

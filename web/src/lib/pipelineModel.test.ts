@@ -13,7 +13,13 @@ function makeStage(overrides: Partial<SpecStage> = {}): SpecStage {
 }
 
 function makeSpec(overrides: Partial<PipelineSpec> = {}): PipelineSpec {
-  return { stages: [makeStage({ key: 'plan' }), makeStage({ key: 'code' })], loop: null, final_gate: true, ...overrides }
+  return {
+    stages: [makeStage({ key: 'plan' }), makeStage({ key: 'code' })],
+    loop: null,
+    final_gate: true,
+    lessons: true,
+    ...overrides,
+  }
 }
 
 function messages(spec: PipelineSpec): string[] {
@@ -135,5 +141,17 @@ describe('parseSpec/serializeSpec round-trip', () => {
     expect(parseSpec('{')).toBeNull()
     expect(parseSpec('{}')).toBeNull()
     expect(parseSpec('{"stages": "nope"}')).toBeNull()
+  })
+
+  it('lessons (T-30): отсутствие ключа = on, "off" — мастер-выключатель, round-trip', () => {
+    const base = { stages: [{ key: 'plan', kind: 'llm-stage', harness: 'kimi', model: 'm', prompt_template: '{{task}}' }] }
+    // ключа нет → включено, в сериализации не появляется
+    const on = parseSpec(JSON.stringify(base))
+    expect(on?.lessons).toBe(true)
+    expect(serializeSpec(on!)).not.toContain('lessons')
+    // lessons: "off" → выключено и сериализуется обратно
+    const off = parseSpec(JSON.stringify({ ...base, lessons: 'off' }))
+    expect(off?.lessons).toBe(false)
+    expect(parseSpec(serializeSpec(off!))?.lessons).toBe(false)
   })
 })

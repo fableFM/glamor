@@ -18,6 +18,8 @@ type yamlPipeline struct {
 	Stages          []yamlStage `yaml:"stages"`
 	Loop            *yamlLoop   `yaml:"loop,omitempty"`
 	FinalGate       string      `yaml:"final_gate,omitempty"`
+	// Lessons — гарантия формирования уроков (T-30): on|off (пусто = on).
+	Lessons string `yaml:"lessons,omitempty"`
 }
 
 type yamlStage struct {
@@ -66,6 +68,7 @@ func specJSONToYAML(name string, version int64, parentVersionID *int64, specJSON
 			MaxIters int64  `json:"max_iters"`
 		} `json:"loop"`
 		FinalGate string `json:"final_gate"`
+		Lessons   string `json:"lessons"`
 	}
 	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
 		return "", fmt.Errorf("failed to parse spec_json: %w", err)
@@ -76,6 +79,7 @@ func specJSONToYAML(name string, version int64, parentVersionID *int64, specJSON
 		Version:         version,
 		ParentVersionID: parentVersionID,
 		FinalGate:       spec.FinalGate,
+		Lessons:         spec.Lessons,
 	}
 	for _, st := range spec.Stages {
 		yst := yamlStage{
@@ -142,6 +146,9 @@ func yamlToSpecJSON(yamlData string) (name, specJSON string, err error) {
 	}
 	if yp.FinalGate != "" {
 		spec["final_gate"] = yp.FinalGate
+	}
+	if yp.Lessons != "" {
+		spec["lessons"] = yp.Lessons
 	}
 
 	data, err := json.Marshal(spec)

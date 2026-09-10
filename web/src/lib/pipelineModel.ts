@@ -49,6 +49,12 @@ export interface PipelineSpec {
   stages: SpecStage[]
   loop: SpecLoop | null
   final_gate: boolean
+  /**
+   * Гарантия формирования уроков (T-30, D-81): чекбокс «Формировать уроки».
+   * Отражает настройку spec (`lessons: "off"` выключает), а не наличие
+   * distill-ноды в графе; отсутствие ключа в JSON = включено (дефолт backend).
+   */
+  lessons: boolean
   /** опционально: без групп ключ в JSON не сериализуется (round-trip стабилен) */
   parallel_groups?: ParallelGroupSpec[]
 }
@@ -173,7 +179,13 @@ export function parseSpec(specJson: string): PipelineSpec | null {
     }
   }
 
-  const result: PipelineSpec = { stages, loop, final_gate: parsed.final_gate != null && parsed.final_gate !== false }
+  const result: PipelineSpec = {
+    stages,
+    loop,
+    final_gate: parsed.final_gate != null && parsed.final_gate !== false,
+    // lessons (T-30): "off" — мастер-выключатель; отсутствие ключа = on
+    lessons: parsed.lessons !== 'off',
+  }
   // ключ parallel_groups появляется в модели, только если есть в JSON (round-trip)
   if (Array.isArray(parsed.parallel_groups)) {
     result.parallel_groups = parsed.parallel_groups.filter(isRecord).map((g) => ({
@@ -208,6 +220,8 @@ export function serializeSpec(spec: PipelineSpec): string {
   }
   if (spec.loop) out.loop = { from: spec.loop.from, to: spec.loop.to, max_iters: spec.loop.max_iters }
   if (spec.final_gate) out.final_gate = 'final_review'
+  // lessons: только выключенное состояние сериализуется (on — дефолт, round-trip)
+  if (!spec.lessons) out.lessons = 'off'
   if (spec.parallel_groups && spec.parallel_groups.length > 0) {
     out.parallel_groups = spec.parallel_groups.map((g) => ({ name: g.name, on_failure: g.on_failure }))
   }

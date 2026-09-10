@@ -64,6 +64,7 @@ func (m *Machine) NextAction(ctx context.Context, runID string) (Action, error) 
 	if err != nil {
 		return Action{}, err
 	}
+	spec = m.augment(spec) // встроенный distill по гарантии lessons:on (T-30)
 
 	for i := 0; i < len(spec.Stages); i++ {
 		stageSpec := spec.Stages[i]

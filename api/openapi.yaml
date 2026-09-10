@@ -696,18 +696,32 @@ paths:
     get:
       tags: [memory]
       operationId: listLessons
-      summary: Список уроков (D-52, T-29)
+      summary: Список уроков (D-52, T-29; фильтры kind/attention — T-30)
       parameters:
         - name: status
           in: query
           schema:
             type: string
-            enum: [proposed, confirmed, rejected, superseded]
+            enum: [proposed, confirmed, rejected, superseded, outdated]
         - name: scope
           in: query
           schema:
             type: string
             enum: [global, project]
+        - name: kind
+          in: query
+          schema:
+            type: string
+            enum: [behavior, vendor]
+        - name: attention
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: |
+            «Требуют внимания» (T-30): outdated (версия вендора разошлась
+            с lockfile) или relapse_count >= applied_success_count
+            (урок инжектят, а область ломается снова).
         - name: project_id
           in: query
           schema:
@@ -722,6 +736,27 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Lesson"
+        default:
+          $ref: "#/components/responses/Error"
+  /lessons/consolidation:
+    get:
+      tags: [memory]
+      operationId: lessonConsolidationCandidates
+      summary: Кандидаты на консолидацию уроков (T-30; ручной prune, без авто-консолидации)
+      parameters:
+        - name: superseded_days
+          in: query
+          schema:
+            type: integer
+            default: 30
+          description: superseded старше N дней — кандидаты на prune
+      responses:
+        "200":
+          description: кандидаты (дубли, протухшие superseded, нездоровые)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LessonConsolidation"
         default:
           $ref: "#/components/responses/Error"
   /lessons/{id}:
@@ -1262,7 +1297,11 @@ components:
           enum: [global, project]
         status:
           type: string
-          enum: [proposed, confirmed, rejected, superseded]
+          enum: [proposed, confirmed, rejected, superseded, outdated]
+        kind:
+          type: string
+          enum: [behavior, vendor]
+          description: вид урока (T-30); vendor — знание о версии вендора
         project_id:
           type: integer
           format: int64
@@ -1274,12 +1313,39 @@ components:
           nullable: true
         stage_key:
           type: string
+        vendor:
+          type: string
+          nullable: true
+        vendor_version:
+          type: string
+          nullable: true
+        area:
+          type: string
+          nullable: true
+          description: область vendor-урока (миграции / API X / ...)
+        importance:
+          type: number
+          format: double
+          description: важность (детерминированная производная счётчиков, T-30)
         applied_count:
           type: integer
           format: int64
+        applied_success_count:
+          type: integer
+          format: int64
+          description: успешные исходы ранов с инъекцией (T-30)
         relapse_count:
           type: integer
           format: int64
+        superseded_by:
+          type: string
+          nullable: true
+          description: id урока-замены (supersede-цепочка, T-30)
+        related:
+          type: array
+          items:
+            type: string
+          description: id связанных уроков (A-MEM related, T-30)
         created_at:
           type: string
           format: date-time
@@ -1291,6 +1357,34 @@ components:
           properties:
             content:
               type: string
+    LessonDuplicatePair:
+      type: object
+      required: [lesson, similar_to, reason]
+      properties:
+        lesson:
+          $ref: "#/components/schemas/Lesson"
+        similar_to:
+          $ref: "#/components/schemas/Lesson"
+        reason:
+          type: string
+          description: shared_trigger:<триггер> | similar_title
+    LessonConsolidation:
+      type: object
+      required: [duplicates, stale_superseded, unhealthy]
+      properties:
+        duplicates:
+          type: array
+          items:
+            $ref: "#/components/schemas/LessonDuplicatePair"
+        stale_superseded:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lesson"
+        unhealthy:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lesson"
+          description: relapse_count >= applied_success_count (урок не работает)
     MemoryFileEntry:
       type: object
       required: [path, vendor, size, updated_at]
@@ -1571,6 +1665,23 @@ components:
           enum: [approve, reject, answer, comment]
         text:
           type: string
+        lesson_ops:
+          type: object
+          description: |
+            Per-card резолв гейта lesson_review (T-30): индексы операций
+            lessons.md в порядке разбора (0-based). Поле отсутствует —
+            «всё или ничего» (все операции принимаются/отклоняются по action).
+          properties:
+            accept:
+              type: array
+              items:
+                type: integer
+              description: принятые операции → применяются (confirmed)
+            reject:
+              type: array
+              items:
+                type: integer
+              description: отклонённые NEW-карточки → rejected (dedup); дельты пропускаются
     ResolveGateResponse:
       type: object
       required: [gate, already_resolved]
